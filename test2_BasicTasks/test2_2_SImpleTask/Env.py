@@ -7,68 +7,84 @@ import os
 from isaacgym.torch_utils import quat_rotate_inverse, to_torch, get_axis_params, torch_rand_float
 import yaml
 class RobotEnv:
+    #-----------0. Initialize the Environment----------------
     def __init__(self, task_cfg_class, sim_cfg_class):
         #-----------1. Initialize GymAPI ,Simulator----------------
         self.task_cfg_class = task_cfg_class
         self.sim_cfg_class = sim_cfg_class
 
         #1.0 Parse Configs
+
+        #parse sim params
+        self.sim_params = gymapi.SimParams()
+        self.sim_params.dt = 1/60
+        self.sim_params.up_axis = gymapi.UP_AXIS_Z
+        self.up_axis_idx = 2 # 2 for z, 1 for y -> adapt gravity accordingly
+        self.sim_params.gravity = gymapi.Vec3(0.0, 0.0, -9.8)
+        self.sim_params.use_gpu_pipeline = sim_cfg_class.use_gpu_pipeline #use GPU pipeline, False for CPU pipeline
+        self.device = sim_cfg_class.device
+
         #parse task config: env
-        self.num_envs = task_cfg_class["env"]["num_envs"]
-        self.num_obs = task_cfg_class["env"]["num_observations"]
-        self.num_privileged_obs = task_cfg_class["env"]["num_privileged_obs"]
-        self.num_priviliged_obs = task_cfg_class["env"]["num_privileged_obs"]
-        self.num_actions = task_cfg_class["env"]["num_actions"]
-        self.env_spacing = self.task_cfg_class["env"]["env_spacing"]
-
-        self.init_state_default_joint_angles = self.task_cfg_class["init_state"]["default_joint_angles"]
-
-        self.control_type = task_cfg_class["control"]["control_type"]
-        self.control_damping = task_cfg_class["control"]["damping"]
-        self.control_stiffness = task_cfg_class["control"]["stiffness"]
-
-        self.add_noise  = task_cfg_class["noise"]["add_noise"]
-        self.noise_scales  = task_cfg_class["noise"]["noise_scales"]
-        self.noise_level = task_cfg_class["noise"]["noise_level"]
-
-        self.num_commands = task_cfg_class["commands"]["num_commands"]
-
-        self.domain_rand_randomize_friction = task_cfg_class["domain_rand"]["randomize_friction"]
-        self.domain_rand_friction_range =   task_cfg_class["domain_rand"]["friction_range"]
-        self.domain_rand_randomize_base_mass = self.task_cfg_class["domain_rand"]["randomize_base_mass"]
-        self.domain_rand_added_mass_range =    self.task_cfg_class["domain_rand"]["added_mass_range"]
-
-        self.rewards_soft_dof_pos_limit = task_cfg_class["rewards"]["soft_dof_pos_limit"]
+        self.num_envs = task_cfg_class.env.num_envs
+        self.num_obs = task_cfg_class.env.num_observations
+        self.num_privileged_obs = task_cfg_class.env.num_privileged_obs
+        self.num_actions = task_cfg_class.env.num_actions
+        self.env_spacing = task_cfg_class.env.env_spacing
+        self.episode_length_s = task_cfg_class.env.episode_length_s
+        #parse task config: init_state
+        self.init_state_default_joint_angles = task_cfg_class.init_state.default_joint_angles
+        #parse task config: control
+        self.control_type = task_cfg_class.control.control_type
+        self.control_damping = task_cfg_class.control.damping
+        self.control_stiffness = task_cfg_class.control.stiffness
+        #parse task config: noise
+        self.add_noise  = task_cfg_class.noise.add_noise
+        self.noise_scales  = task_cfg_class.noise.noise_scales
+        self.noise_level = task_cfg_class.noise.noise_level
+        #parse task config: commands
+        self.num_commands = task_cfg_class.commands.num_commands
+        self.commands_ranges = task_cfg_class.commands.ranges
+        #parse task config: domain_rand
+        self.domain_rand_randomize_friction = task_cfg_class.domain_rand.randomize_friction
+        self.domain_rand_friction_range =   task_cfg_class.domain_rand.friction_range
+        self.domain_rand_randomize_base_mass = task_cfg_class.domain_rand.randomize_base_mass
+        self.domain_rand_added_mass_range =    task_cfg_class.domain_rand.added_mass_range
+        #parse task config: rewards
+        self.rewards_soft_dof_pos_limit = task_cfg_class.rewards.soft_dof_pos_limit
+        self.reward_scales = task_cfg_class.rewards.scales
+        #parse task config: normalization
+        self.obs_scales = task_cfg_class.normalization.obs_scales
         #parse task config: asset
         asset_options = gymapi.AssetOptions()
-        self.asset_name = task_cfg_class["asset"]["name"]
-        self.asset_self_collisions= task_cfg_class["asset"]["self_collisions"]
-        asset_options.default_dof_drive_mode = task_cfg_class["asset"]["default_dof_drive_mode"]
-        asset_options.collapse_fixed_joints = task_cfg_class["asset"]["collapse_fixed_joints"]
-        asset_options.replace_cylinder_with_capsule = task_cfg_class["asset"]["replace_cylinder_with_capsule"]
-        asset_options.flip_visual_attachments = task_cfg_class["asset"]["flip_visual_attachments"]
-        asset_options.fix_base_link = task_cfg_class["asset"]["fix_base_link"]
-        asset_options.density = task_cfg_class["asset"]["density"]
-        asset_options.angular_damping = task_cfg_class["asset"]["angular_damping"]
-        asset_options.linear_damping = task_cfg_class["asset"]["linear_damping"]
-        asset_options.max_angular_velocity = task_cfg_class["asset"]["max_angular_velocity"]
-        asset_options.max_linear_velocity = task_cfg_class["asset"]["max_linear_velocity"]
-        asset_options.armature = task_cfg_class["asset"]["armature"]
-        asset_options.thickness = task_cfg_class["asset"]["thickness"]
-        asset_options.disable_gravity = task_cfg_class["asset"]["disable_gravity"]
-        #parse sim params
-        sim_params = gymapi.SimParams()
-        sim_params.dt = 1/60
-        sim_params.up_axis = gymapi.UP_AXIS_Z
-        sim_params.gravity = gymapi.Vec3(0.0, 0.0, -9.8)
-        sim_params.use_gpu_pipeline = sim_cfg_class["sim_params"]["use_gpu_pipeline"] #use GPU pipeline, False for CPU pipeline
-        self.device = sim_cfg_class["sim_params"]["device"]
+        self.asset_name = task_cfg_class.asset.name
+        self.asset_self_collisions= task_cfg_class.asset.self_collisions
+        asset_options.default_dof_drive_mode = task_cfg_class.asset.default_dof_drive_mode
+        asset_options.collapse_fixed_joints = task_cfg_class.asset.collapse_fixed_joints
+        asset_options.replace_cylinder_with_capsule = task_cfg_class.asset.replace_cylinder_with_capsule
+        asset_options.flip_visual_attachments = task_cfg_class.asset.flip_visual_attachments
+        asset_options.fix_base_link = task_cfg_class.asset.fix_base_link
+        asset_options.density = task_cfg_class.asset.density
+        asset_options.angular_damping = task_cfg_class.asset.angular_damping
+        asset_options.linear_damping = task_cfg_class.asset.linear_damping
+        asset_options.max_angular_velocity = task_cfg_class.asset.max_angular_velocity
+        asset_options.max_linear_velocity = task_cfg_class.asset.max_linear_velocity
+        asset_options.armature = task_cfg_class.asset.armature
+        asset_options.thickness = task_cfg_class.asset.thickness
+        asset_options.disable_gravity = task_cfg_class.asset.disable_gravity
+
+        #compute other quantities
+        self.dt  = self.task_cfg_class.control.decimation * self.sim_params.dt
+        self.max_episode_length_s = self.episode_length_s
+        self.max_episode_length = np.ceil(self.max_episode_length_s / self.dt).astype(int)
+        self.task_cfg_class.domain_rand.push_interval = np.ceil(self.task_cfg_class.domain_rand.push_interval_s / self.dt)
+
+
 
         #1.1 reate GymAPI Instance
         self.gym = gymapi.acquire_gym()
 
         #1.2 Create the SImulator
-        self.sim = self.gym.create_sim(compute_device=0, graphics_device=0, type=gymapi.SIM_PHYSX, params=sim_params)
+        self.sim = self.gym.create_sim(compute_device=0, graphics_device=0, type=gymapi.SIM_PHYSX, params=self.sim_params)
 
         #1.3 Create Ground Plane
         #configure the ground plane
@@ -91,7 +107,7 @@ class RobotEnv:
 
         #2.--------------------Construct a Environment----------------
         #2.0 Load an Asset
-        asset_root = os.path.join(os.path.dirname(os.path.dirname(os.path.realpath(__file__))),"assets")
+        asset_root = os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(__file__))),"assets")
         asset_file = "anymal_c/urdf/anymal_c.urdf"        
 
         #load the asset
@@ -103,10 +119,19 @@ class RobotEnv:
             print("Successfully loaded asset:", os.path.join(asset_root, asset_file))
 
         #get the asset properties
-        self.num_dof = self.gym.get_asset_dof_count(robot_asset)
+        self.num_dofs = self.gym.get_asset_dof_count(robot_asset)
         self.num_bodies = self.gym.get_asset_rigid_body_count(robot_asset)
         dof_props_asset = self.gym.get_asset_dof_properties(robot_asset)
         rigid_shape_props_asset = self.gym.get_asset_rigid_shape_properties(robot_asset)
+        body_names = self.gym.get_asset_rigid_body_names(robot_asset)
+        self.dof_names = self.gym.get_asset_dof_names(robot_asset)
+        feet_names = [s for s in body_names if self.task_cfg_class.asset.foot_name in s]
+        penalized_contact_names = []
+        for name in self.task_cfg_class.asset.penalize_contacts_on:
+            penalized_contact_names.extend([s for s in body_names if name in s])
+        termination_contact_names = []
+        for name in self.task_cfg_class.asset.terminate_after_contacts_on:
+            termination_contact_names.extend([s for s in body_names if name in s])        
 
 
         #2.1 Create the Environment Space
@@ -138,6 +163,18 @@ class RobotEnv:
             self.gym.set_actor_rigid_body_properties(env_handle, actor_handle, body_props, recomputeInertia=True)
             self.envs.append(env_handle)
             self.actor_handles.append(actor_handle)
+
+        self.feet_indices = torch.zeros(len(feet_names), dtype=torch.long, device=self.device, requires_grad=False)
+        for i in range(len(feet_names)):
+            self.feet_indices[i] = self.gym.find_actor_rigid_body_handle(self.envs[0], self.actor_handles[0], feet_names[i])
+
+        self.penalised_contact_indices = torch.zeros(len(penalized_contact_names), dtype=torch.long, device=self.device, requires_grad=False)
+        for i in range(len(penalized_contact_names)):
+            self.penalised_contact_indices[i] = self.gym.find_actor_rigid_body_handle(self.envs[0], self.actor_handles[0], penalized_contact_names[i])
+
+        self.termination_contact_indices = torch.zeros(len(termination_contact_names), dtype=torch.long, device=self.device, requires_grad=False)
+        for i in range(len(termination_contact_names)):
+            self.termination_contact_indices[i] = self.gym.find_actor_rigid_body_handle(self.envs[0], self.actor_handles[0], termination_contact_names[i])
         #3.----------------------Simulation and Rendering Loop------------------------
 
         # Prepare the simulator after all assets and environments have been added
@@ -149,9 +186,6 @@ class RobotEnv:
         
         self._init_buffers()
         self.init_done = True
-
-
-
     def _init_buffers(self):
         """ Initialize torch tensors which will contain simulation states and processed quantities
         """
@@ -166,8 +200,8 @@ class RobotEnv:
         # create some wrapper tensors for different slices
         self.root_states = gymtorch.wrap_tensor(actor_root_state)
         self.dof_state = gymtorch.wrap_tensor(dof_state_tensor)
-        self.dof_pos = self.dof_state.view(self.num_envs, self.num_dof, 2)[..., 0]
-        self.dof_vel = self.dof_state.view(self.num_envs, self.num_dof, 2)[..., 1]
+        self.dof_pos = self.dof_state.view(self.num_envs, self.num_dofs, 2)[..., 0]
+        self.dof_vel = self.dof_state.view(self.num_envs, self.num_dofs, 2)[..., 1]
         self.base_quat = self.root_states[:, 3:7]
 
         self.contact_forces = gymtorch.wrap_tensor(net_contact_forces).view(self.num_envs, -1, 3) # shape: num_envs, num_bodies, xyz axis
@@ -195,7 +229,7 @@ class RobotEnv:
         self.measured_heights = 0
 
         # joint positions offsets and PD gains
-        self.default_dof_pos = torch.zeros(self.num_dof, dtype=torch.float, device=self.device, requires_grad=False)
+        self.default_dof_pos = torch.zeros(self.num_dofs, dtype=torch.float, device=self.device, requires_grad=False)
         for i in range(self.num_dofs):
             name = self.dof_names[i]
             angle = self.init_state_default_joint_angles[name]
@@ -284,9 +318,9 @@ class RobotEnv:
             [numpy.array]: Modified DOF properties
         """
         if env_id==0:
-            self.dof_pos_limits = torch.zeros(self.num_dof, 2, dtype=torch.float, device=self.device, requires_grad=False)
-            self.dof_vel_limits = torch.zeros(self.num_dof, dtype=torch.float, device=self.device, requires_grad=False)
-            self.torque_limits = torch.zeros(self.num_dof, dtype=torch.float, device=self.device, requires_grad=False)
+            self.dof_pos_limits = torch.zeros(self.num_dofs, 2, dtype=torch.float, device=self.device, requires_grad=False)
+            self.dof_vel_limits = torch.zeros(self.num_dofs, dtype=torch.float, device=self.device, requires_grad=False)
+            self.torque_limits = torch.zeros(self.num_dofs, dtype=torch.float, device=self.device, requires_grad=False)
             for i in range(len(props)):
                 self.dof_pos_limits[i, 0] = props["lower"][i].item()
                 self.dof_pos_limits[i, 1] = props["upper"][i].item()
@@ -310,51 +344,74 @@ class RobotEnv:
             rng = self.domain_rand_added_mass_range
             props[0].mass += np.random.uniform(rng[0], rng[1])
         return props
-
+    #-----------1. Step the Environment----------------
     def step(self,actions):
         """
         actions (torch.Tensor):  Dim:(num_envs, num_actions_per_env)
         """
-        action_bound = self.task_cfg_class["normalization"]["clip_actions"]
+        action_bound = self.task_cfg_class.normalization.clip_actions
         self.actions = torch.clip(actions, -action_bound, action_bound)
-
-        self.pre_physics_step(self.actions)
-
-        for _ in range(self.task_cfg_class["control"]["decimation"]):
-
-            self.gym.set_actor_dof_force(self.sim, gymtorch.unwarp_tensor(self.torques_buffer))
+        
+        for _ in range(self.task_cfg_class.control.decimation):
+            self.torques = self._compute_torques(self.actions).view(self.torques.shape)
+            self.gym.set_dof_actuation_force_tensor(self.sim, gymtorch.unwrap_tensor(self.torques))
             self.gym.simulate(self.sim)
             if(self.device != "cpu"):
                 self.gym.fetch_results(self.sim, True)
             self.gym.refresh_dof_state_tensor(self.sim)
-        
+        self.render()
         self.post_physics_step()
-    def pre_physics_step(self, actions):
+
+        # return clipped obs, clipped states (None), rewards, dones and infos
+        clip_obs = self.task_cfg_class.normalization.clip_observations
+        self.obs_buf = torch.clip(self.obs_buf, -clip_obs, clip_obs)
+        if self.privileged_obs_buf is not None:
+            self.privileged_obs_buf = torch.clip(self.privileged_obs_buf, -clip_obs, clip_obs)
+        return self.obs_buf, self.privileged_obs_buf, self.rew_buf, self.reset_buf, self.extras
+    def _compute_torques(self, actions):
+        """ Compute torques from actions.
+            Actions can be interpreted as position or velocity targets given to a PD controller, or directly as scaled torques.
+            [NOTE]: torques must have the same dimension as the number of DOFs, even if some DOFs are not actuated.
+
+        Args:
+            actions (torch.Tensor): Actions
+
+        Returns:
+            [torch.Tensor]: Torques sent to the simulation
         """
-        actions (torch.Tensor):  Dim:(num_envs, num_actions_per_env)
-        """
-        pass
+        #pd controller
+        actions_scaled = actions * self.task_cfg_class.control.action_scale
+        control_type = self.task_cfg_class.control.control_type
+        if control_type=="P":
+            torques = self.p_gains*(actions_scaled + self.default_dof_pos - self.dof_pos) - self.d_gains*self.dof_vel
+        elif control_type=="V":
+            torques = self.p_gains*(actions_scaled - self.dof_vel) - self.d_gains*(self.dof_vel - self.last_dof_vel)/self.sim_params.dt
+        elif control_type=="T":
+            torques = actions_scaled
+        else:
+            raise NameError(f"Unknown controller type: {control_type}")
+        return torch.clip(torques, -self.torque_limits, self.torque_limits)
     def post_physics_step(self):
         pass
-
-if __name__ == "__main__":
-    config_root = os.path.dirname(__file__) + "/config/"
-    with open(config_root + "train_cfg.yaml","r") as file:
-        train_cfg_dict = yaml.safe_load(file)
-    with open(config_root + "task_cfg.yaml","r") as file:
-        task_cfg_dict = yaml.safe_load(file)
-    with open(config_root + "sim_cfg.yaml","r") as file:
-        sim_cfg_dict = yaml.safe_load(file)
-
-    env = RobotEnv(task_cfg_dict, sim_cfg_dict)
-    while True:
-        #step the physics
-        env.gym.simulate(env.sim)
-        env.gym.fetch_results(env.sim, True)#wait for the results on in cpu
-
+    def render(self):
         #step the rendering
-        env.gym.step_graphics(env.sim)
-        env.gym.draw_viewer(env.viewer, env.sim, True)
-
+        self.gym.step_graphics(self.sim)
+        self.gym.draw_viewer(self.viewer, self.sim, True)
         #step the graphics
-        env.gym.sync_frame_time(env.sim)
+        self.gym.sync_frame_time(self.sim)
+    #-----------2. Reset the Environment----------------
+    def reset(self):
+        """ Reset all robots"""
+        self.reset_idx(torch.arange(self.num_envs, device=self.device))
+        obs, privileged_obs, _, _, _ = self.step(torch.zeros(self.num_envs, self.num_actions, device=self.device, requires_grad=False))
+        return obs, privileged_obs
+    def reset_idx(self, env_ids):
+        """Reset selected robots"""
+        pass
+    #-----------3. get methods----------------
+    def get_observations(self):
+        return self.obs_buf
+    def get_privileged_observations(self):
+        return self.privileged_obs_buf
+if __name__ == "__main__":
+    pass
