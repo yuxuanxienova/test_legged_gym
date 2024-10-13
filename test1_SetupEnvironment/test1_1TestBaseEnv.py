@@ -11,7 +11,7 @@ from test1_SetupEnvironment.legged_robot_config import LeggedRobotCfg
 
 
 if __name__ == "__main__":
-    #-----------1. Initialize SImulator----------------
+    #-----------1. Initialize Simulator----------------
     cfg = LeggedRobotCfg
     #1.1 reate GymAPI Instance
     gym = gymapi.acquire_gym()
@@ -35,14 +35,14 @@ if __name__ == "__main__":
     #create the graound plane
     gym.add_ground(sim, plane_params)
 
-    #2.--------------------Construct and Environment----------------
+    #2.--------------------Construct a Environment----------------
 
     #2.1 Create the Environment Space
     env_lower = gymapi.Vec3(0.0,0.0,0.0)
     env_upper = gymapi.Vec3(0.0,0.0,0.0)
     env = gym.create_env(sim, env_lower, env_upper, 1)
     #Load an Asset
-    asset_root = os.path.join(os.path.dirname(os.path.realpath(__file__)),"assets")
+    asset_root = os.path.join(os.path.dirname(os.path.dirname(os.path.realpath(__file__))),"assets")
     # asset_file = "anymal_c/urdf/anymal_c.urdf"
     asset_file = "anymal_c/urdf/anymal_c.urdf"
     #load assets with default control type of position for all the joints
@@ -70,10 +70,8 @@ if __name__ == "__main__":
 
     #2.2 Create the Actor
     
-    base_init_state_list = cfg.init_state.pos + cfg.init_state.rot + cfg.init_state.lin_vel + cfg.init_state.ang_vel
-    base_init_state = torch.tensor(base_init_state_list, device="cuda:0", requires_grad=False)
     start_pose = gymapi.Transform()
-    start_pose.p = gymapi.Vec3(*base_init_state[:3])
+    start_pose.p = gymapi.Vec3(*torch.tensor(cfg.init_state.pos,device="cuda:0", requires_grad=False))#initial position
     actor_handle = gym.create_actor(env, asset, start_pose, cfg.asset.name, 0,cfg.asset.self_collisions, 0)
     #3.----------------------Simulation and Rendering Loop------------------------
 
