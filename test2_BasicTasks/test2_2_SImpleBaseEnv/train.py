@@ -11,7 +11,7 @@ import isaacgym
 import torch
 from rsl_rl.runners.on_policy_runner import OnPolicyRunner
 import yaml
-from Env import RobotEnv
+from test2_BasicTasks.test2_2_SImpleBaseEnv.BaseEnv import BaseEnv
 
 if __name__ == "__main__":
     task_cfg = TaskConfig
@@ -21,6 +21,6 @@ if __name__ == "__main__":
 
 
 
-    env = RobotEnv(task_cfg, sim_cfg)
+    env = BaseEnv(task_cfg, sim_cfg)
     runner = OnPolicyRunner(env,train_cfg_dict , log_dir=None, device="cuda:0")
     runner.learn(num_learning_iterations=train_cfg_dict["runner"]["max_iterations"], init_at_random_ep_len=True)

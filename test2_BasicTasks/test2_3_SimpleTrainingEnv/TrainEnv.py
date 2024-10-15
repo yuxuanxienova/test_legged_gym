@@ -1,15 +1,15 @@
 import os
 import sys 
 sys.path.append(os.path.dirname(os.path.dirname(os.path.dirname(__file__))))
-from test2_BasicTasks.utils import class_to_dict
 from isaacgym import gymapi
 from isaacgym import gymutil, gymtorch
 import numpy as np
 import torch
 import os
-from isaacgym.torch_utils import quat_rotate_inverse, to_torch, get_axis_params, torch_rand_float
+from isaacgym.torch_utils import quat_rotate_inverse, to_torch, get_axis_params, torch_rand_float, quat_apply
+from test2_BasicTasks.utils import class_to_dict, wrap_to_pi
 import yaml
-class RobotEnv:
+class TrainEnv:
     #-----------0. Initialize the Environment----------------
     def __init__(self, task_cfg_class, sim_cfg_class):
         #-----------1. Initialize GymAPI ,Simulator----------------
@@ -20,12 +20,24 @@ class RobotEnv:
 
         #parse sim params
         self.sim_params = gymapi.SimParams()
-        self.sim_params.dt = 1/60
+        self.sim_params.dt = sim_cfg_class.dt
         self.sim_params.up_axis = gymapi.UP_AXIS_Z
         self.up_axis_idx = 2 # 2 for z, 1 for y -> adapt gravity accordingly
-        self.sim_params.gravity = gymapi.Vec3(0.0, 0.0, -9.8)
+        self.sim_params.gravity = gymapi.Vec3(*sim_cfg_class.gravity)
         self.sim_params.use_gpu_pipeline = sim_cfg_class.use_gpu_pipeline #use GPU pipeline, False for CPU pipeline
         self.device = sim_cfg_class.device
+        #parse physx params
+        self.sim_params.physx.num_threads = sim_cfg_class.physx.num_threads
+        self.sim_params.physx.solver_type = sim_cfg_class.physx.solver_type
+        self.sim_params.physx.num_position_iterations = sim_cfg_class.physx.num_position_iterations
+        self.sim_params.physx.num_velocity_iterations = sim_cfg_class.physx.num_velocity_iterations
+        self.sim_params.physx.contact_offset = sim_cfg_class.physx.contact_offset
+        self.sim_params.physx.rest_offset = sim_cfg_class.physx.rest_offset
+        self.sim_params.physx.bounce_threshold_velocity = sim_cfg_class.physx.bounce_threshold_velocity
+        self.sim_params.physx.max_depenetration_velocity = sim_cfg_class.physx.max_depenetration_velocity
+        self.sim_params.physx.max_gpu_contact_pairs = sim_cfg_class.physx.max_gpu_contact_pairs
+        self.sim_params.physx.default_buffer_size_multiplier = sim_cfg_class.physx.default_buffer_size_multiplier
+        self.sim_params.physx.contact_collection = gymapi.ContactCollection.CC_ALL_SUBSTEPS
 
         #parse task config: env
         self.num_envs = task_cfg_class.env.num_envs
@@ -47,12 +59,19 @@ class RobotEnv:
         self.noise_level = task_cfg_class.noise.noise_level
         #parse task config: commands
         self.num_commands = task_cfg_class.commands.num_commands
-        self.commands_ranges = task_cfg_class.commands.ranges
+        self.commands_ranges =class_to_dict(task_cfg_class.commands.ranges)
         #parse task config: domain_rand
         self.domain_rand_randomize_friction = task_cfg_class.domain_rand.randomize_friction
         self.domain_rand_friction_range =   task_cfg_class.domain_rand.friction_range
         self.domain_rand_randomize_base_mass = task_cfg_class.domain_rand.randomize_base_mass
         self.domain_rand_added_mass_range =    task_cfg_class.domain_rand.added_mass_range
+        #parse task config: terrain
+        plane_params = gymapi.PlaneParams()
+        plane_params.normal = gymapi.Vec3(0.0,0.0,1.0)#z-up axis
+        plane_params.static_friction = self.task_cfg_class.terrain.static_friction
+        plane_params.dynamic_friction = self.task_cfg_class.terrain.dynamic_friction
+        plane_params.restitution = self.task_cfg_class.terrain.restitution
+        plane_params.distance = 0 #distance from the origin
         #parse task config: rewards
         self.rewards_soft_dof_pos_limit = task_cfg_class.rewards.soft_dof_pos_limit
         self.reward_scales = class_to_dict(task_cfg_class.rewards.scales)
@@ -91,12 +110,12 @@ class RobotEnv:
         self.sim = self.gym.create_sim(compute_device=0, graphics_device=0, type=gymapi.SIM_PHYSX, params=self.sim_params)
 
         #1.3 Create Ground Plane
-        #configure the ground plane
-        plane_params = gymapi.PlaneParams()
-        plane_params.normal = gymapi.Vec3(0,0,1)#z-up axis
-        plane_params.distance = 0 #distance from the origin
         #create the graound plane
         self.gym.add_ground(self.sim, plane_params)
+
+        # optimization flags for pytorch JIT
+        torch._C._jit_set_profiling_mode(False)
+        torch._C._jit_set_profiling_executor(False)
 
         #1.4 Allocate buffers
         self.obs_buf = torch.zeros(self.num_envs, self.num_obs, device=self.device, dtype=torch.float)
@@ -209,6 +228,7 @@ class RobotEnv:
         self.dof_state = gymtorch.wrap_tensor(dof_state_tensor)
         self.dof_pos = self.dof_state.view(self.num_envs, self.num_dofs, 2)[..., 0]
         self.dof_vel = self.dof_state.view(self.num_envs, self.num_dofs, 2)[..., 1]
+        print("[Debug]self.dof_pos: {0}".format(self.dof_pos.cpu().numpy()))
         self.base_quat = self.root_states[:, 3:7]
 
         self.contact_forces = gymtorch.wrap_tensor(net_contact_forces).view(self.num_envs, -1, 3) # shape: num_envs, num_bodies, xyz axis
@@ -308,7 +328,7 @@ class RobotEnv:
         noise_vec[12:24] = noise_scales.dof_pos * noise_level * self.obs_scales.dof_pos
         noise_vec[24:36] = noise_scales.dof_vel * noise_level * self.obs_scales.dof_vel
         noise_vec[36:48] = 0. # previous actions
-        # if self.cfg.terrain.measure_heights:
+        # if self.task_cfg_class.terrain.measure_heights:
         #     noise_vec[48:235] = noise_scales.height_measurements* noise_level * self.obs_scales.height_measurements
         return noise_vec
     def _process_dof_props(self, props, env_id):
@@ -382,6 +402,8 @@ class RobotEnv:
         """
         action_bound = self.task_cfg_class.normalization.clip_actions
         self.actions = torch.clip(actions, -action_bound, action_bound)
+
+        # self.actions = self.actions.to(self.device)
         
         for _ in range(self.task_cfg_class.control.decimation):
             self.torques = self._compute_torques(self.actions).view(self.torques.shape)
@@ -390,12 +412,16 @@ class RobotEnv:
             if(self.device != "cpu"):
                 self.gym.fetch_results(self.sim, True)
             self.gym.refresh_dof_state_tensor(self.sim)
+            print("[Debug][step={0}]self.dof_pos: {1}".format(self.common_step_counter,self.dof_pos.cpu().numpy()))
+            print("[Debug][step={0}]self.dof_vel: {1}".format(self.common_step_counter,self.dof_vel.cpu().numpy()))
         self.render()
         self.post_physics_step()
 
         # return clipped obs, clipped states (None), rewards, dones and infos
         clip_obs = self.task_cfg_class.normalization.clip_observations
         self.obs_buf = torch.clip(self.obs_buf, -clip_obs, clip_obs)
+        #print the rewards
+        # print("[INFO][step={0}] rewards: {1}".format(self.common_step_counter,np.mean(self.rew_buf.cpu().numpy())))
         if self.privileged_obs_buf is not None:
             self.privileged_obs_buf = torch.clip(self.privileged_obs_buf, -clip_obs, clip_obs)
         return self.obs_buf, self.privileged_obs_buf, self.rew_buf, self.reset_buf, self.extras
@@ -423,7 +449,113 @@ class RobotEnv:
             raise NameError(f"Unknown controller type: {control_type}")
         return torch.clip(torques, -self.torque_limits, self.torque_limits)
     def post_physics_step(self):
-        pass
+        """ check terminations, compute observations and rewards
+            calls self._post_physics_step_callback() for common computations 
+            calls self._draw_debug_vis() if needed
+        """
+        self.gym.refresh_actor_root_state_tensor(self.sim)
+        self.gym.refresh_net_contact_force_tensor(self.sim)
+
+        self.episode_length_buf += 1
+        self.common_step_counter += 1
+
+        # prepare quantities
+        self.base_quat[:] = self.root_states[:, 3:7]
+        self.base_lin_vel[:] = quat_rotate_inverse(self.base_quat, self.root_states[:, 7:10])
+        self.base_ang_vel[:] = quat_rotate_inverse(self.base_quat, self.root_states[:, 10:13])
+        self.projected_gravity[:] = quat_rotate_inverse(self.base_quat, self.gravity_vec)
+
+        # Compute ang vel command based on target and heading
+        env_ids = (self.episode_length_buf % int(self.task_cfg_class.commands.resampling_time / self.dt)==0).nonzero(as_tuple=False).flatten()
+        self._resample_commands(env_ids)
+        if self.task_cfg_class.commands.heading_command:
+            forward = quat_apply(self.base_quat, self.forward_vec)
+            heading = torch.atan2(forward[:, 1], forward[:, 0])
+            self.commands[:, 2] = torch.clip(0.5*wrap_to_pi(self.commands[:, 3] - heading), -1., 1.)
+
+        # compute measured terrain heights
+        # if self.task_cfg_class.terrain.measure_heights:
+        #     self.measured_heights = self._get_heights()
+        # randomly push robots
+        # if self.task_cfg_class.domain_rand.push_robots and  (self.common_step_counter % self.task_cfg_class.domain_rand.push_interval == 0):
+        #     self._push_robots()
+
+        # compute observations, rewards, resets, ...
+        self.check_termination()
+        self.compute_reward()
+        env_ids = self.reset_buf.nonzero(as_tuple=False).flatten()
+        self.reset_idx(env_ids)
+        self.compute_observations() # in some cases a simulation step might be required to refresh some obs (for example body positions)
+
+        self.last_actions[:] = self.actions[:]
+        self.last_dof_vel[:] = self.dof_vel[:]
+        self.last_root_vel[:] = self.root_states[:, 7:13]
+
+        # if self.viewer and self.enable_viewer_sync and self.debug_viz:
+        #     self._draw_debug_vis()
+    def _resample_commands(self, env_ids):
+        """ Randommly select commands of some environments
+
+        Args:
+            env_ids (List[int]): Environments ids for which new commands are needed
+        """
+        self.commands[env_ids, 0] = torch_rand_float(self.commands_ranges["lin_vel_x"][0], self.commands_ranges["lin_vel_x"][1], (len(env_ids), 1), device=self.device).squeeze(1)
+        self.commands[env_ids, 1] = torch_rand_float(self.commands_ranges["lin_vel_y"][0], self.commands_ranges["lin_vel_y"][1], (len(env_ids), 1), device=self.device).squeeze(1)
+        if self.task_cfg_class.commands.heading_command:
+            self.commands[env_ids, 3] = torch_rand_float(self.commands_ranges["heading"][0], self.commands_ranges["heading"][1], (len(env_ids), 1), device=self.device).squeeze(1)
+        else:
+            self.commands[env_ids, 2] = torch_rand_float(self.commands_ranges["ang_vel_yaw"][0], self.commands_ranges["ang_vel_yaw"][1], (len(env_ids), 1), device=self.device).squeeze(1)
+
+        # set small commands to zero
+        self.commands[env_ids, :2] *= (torch.norm(self.commands[env_ids, :2], dim=1) > 0.2).unsqueeze(1)
+    def _push_robots(self):
+        """ Random pushes the robots. Emulates an impulse by setting a randomized base velocity. 
+        """
+        max_vel = self.task_cfg_class.domain_rand.max_push_vel_xy
+        self.root_states[:, 7:9] = torch_rand_float(-max_vel, max_vel, (self.num_envs, 2), device=self.device) # lin vel x/y
+        self.gym.set_actor_root_state_tensor(self.sim, gymtorch.unwrap_tensor(self.root_states))
+    def check_termination(self):
+        """ Check if environments need to be reset
+        """
+        self.reset_buf = torch.any(torch.norm(self.contact_forces[:, self.termination_contact_indices, :], dim=-1) > 1., dim=1)
+        self.time_out_buf = self.episode_length_buf > self.max_episode_length # no terminal reward for time-outs
+        self.reset_buf |= self.time_out_buf
+    def compute_reward(self):
+        """ Compute rewards
+            Calls each reward function which had a non-zero scale (processed in self._prepare_reward_function())
+            adds each terms to the episode sums and to the total reward
+        """
+        self.rew_buf[:] = 0.
+        for i in range(len(self.reward_functions)):
+            name = self.reward_names[i]
+            rew = self.reward_functions[i]() * self.reward_scales[name]
+            self.rew_buf += rew
+            self.episode_sums[name] += rew
+        if self.task_cfg_class.rewards.only_positive_rewards:
+            self.rew_buf[:] = torch.clip(self.rew_buf[:], min=0.)
+        # add termination reward after clipping
+        if "termination" in self.reward_scales:
+            rew = self._reward_termination() * self.reward_scales["termination"]
+            self.rew_buf += rew
+            self.episode_sums["termination"] += rew
+    def compute_observations(self):
+        """ Computes observations
+        """
+        self.obs_buf = torch.cat((  self.base_lin_vel * self.obs_scales.lin_vel,
+                                    self.base_ang_vel  * self.obs_scales.ang_vel,
+                                    self.projected_gravity,
+                                    self.commands[:, :3] * self.commands_scale,
+                                    (self.dof_pos - self.default_dof_pos) * self.obs_scales.dof_pos,
+                                    self.dof_vel * self.obs_scales.dof_vel,
+                                    self.actions
+                                    ),dim=-1)
+        # add perceptive inputs if not blind
+        if self.task_cfg_class.terrain.measure_heights:
+            heights = torch.clip(self.root_states[:, 2].unsqueeze(1) - 0.5 - self.measured_heights, -1, 1.) * self.obs_scales.height_measurements
+            self.obs_buf = torch.cat((self.obs_buf, heights), dim=-1)#Dim:(num_envs, num_obs)
+        # add noise if needed
+        if self.add_noise:
+            self.obs_buf += (2 * torch.rand_like(self.obs_buf) - 1) * self.noise_scale_vec
     def render(self):
         #step the rendering
         self.gym.step_graphics(self.sim)
@@ -457,7 +589,7 @@ class RobotEnv:
     def _reward_base_height(self):
         # Penalize base height away from target
         base_height = torch.mean(self.root_states[:, 2].unsqueeze(1) - self.measured_heights, dim=1)
-        return torch.square(base_height - self.cfg.rewards.base_height_target)
+        return torch.square(base_height - self.task_cfg_class.rewards.base_height_target)
     def _reward_torques(self):
         # Penalize torques
         return torch.sum(torch.square(self.torques), dim=1)
@@ -484,18 +616,18 @@ class RobotEnv:
     def _reward_dof_vel_limits(self):
         # Penalize dof velocities too close to the limit
         # clip to max error = 1 rad/s per joint to avoid huge penalties
-        return torch.sum((torch.abs(self.dof_vel) - self.dof_vel_limits*self.cfg.rewards.soft_dof_vel_limit).clip(min=0., max=1.), dim=1)
+        return torch.sum((torch.abs(self.dof_vel) - self.dof_vel_limits*self.task_cfg_class.rewards.soft_dof_vel_limit).clip(min=0., max=1.), dim=1)
     def _reward_torque_limits(self):
         # penalize torques too close to the limit
-        return torch.sum((torch.abs(self.torques) - self.torque_limits*self.cfg.rewards.soft_torque_limit).clip(min=0.), dim=1)
+        return torch.sum((torch.abs(self.torques) - self.torque_limits*self.task_cfg_class.rewards.soft_torque_limit).clip(min=0.), dim=1)
     def _reward_tracking_lin_vel(self):
         # Tracking of linear velocity commands (xy axes)
         lin_vel_error = torch.sum(torch.square(self.commands[:, :2] - self.base_lin_vel[:, :2]), dim=1)
-        return torch.exp(-lin_vel_error/self.cfg.rewards.tracking_sigma)
+        return torch.exp(-lin_vel_error/self.task_cfg_class.rewards.tracking_sigma)
     def _reward_tracking_ang_vel(self):
         # Tracking of angular velocity commands (yaw) 
         ang_vel_error = torch.square(self.commands[:, 2] - self.base_ang_vel[:, 2])
-        return torch.exp(-ang_vel_error/self.cfg.rewards.tracking_sigma)
+        return torch.exp(-ang_vel_error/self.task_cfg_class.rewards.tracking_sigma)
     def _reward_feet_air_time(self):
         # Reward long steps
         # Need to filter the contacts because the contact reporting of PhysX is unreliable on meshes
@@ -517,6 +649,6 @@ class RobotEnv:
         return torch.sum(torch.abs(self.dof_pos - self.default_dof_pos), dim=1) * (torch.norm(self.commands[:, :2], dim=1) < 0.1)
     def _reward_feet_contact_forces(self):
         # penalize high contact forces
-        return torch.sum((torch.norm(self.contact_forces[:, self.feet_indices, :], dim=-1) -  self.cfg.rewards.max_contact_force).clip(min=0.), dim=1)
+        return torch.sum((torch.norm(self.contact_forces[:, self.feet_indices, :], dim=-1) -  self.task_cfg_class.rewards.max_contact_force).clip(min=0.), dim=1)
 
 
