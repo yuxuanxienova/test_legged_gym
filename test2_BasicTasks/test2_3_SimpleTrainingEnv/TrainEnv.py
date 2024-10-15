@@ -154,7 +154,9 @@ class TrainEnv:
             penalized_contact_names.extend([s for s in body_names if name in s])
         termination_contact_names = []
         for name in self.task_cfg_class.asset.terminate_after_contacts_on:
-            termination_contact_names.extend([s for s in body_names if name in s])        
+            termination_contact_names.extend([s for s in body_names if name in s])   
+        base_init_state_list = self.task_cfg_class.init_state.pos + self.task_cfg_class.init_state.rot + self.task_cfg_class.init_state.lin_vel + self.task_cfg_class.init_state.ang_vel
+        self.base_init_state = to_torch(base_init_state_list, device=self.device, requires_grad=False)     
 
 
         #2.1 Create the Environment Space
@@ -412,8 +414,6 @@ class TrainEnv:
             if(self.device != "cpu"):
                 self.gym.fetch_results(self.sim, True)
             self.gym.refresh_dof_state_tensor(self.sim)
-            print("[Debug][step={0}]self.dof_pos: {1}".format(self.common_step_counter,self.dof_pos.cpu().numpy()))
-            print("[Debug][step={0}]self.dof_vel: {1}".format(self.common_step_counter,self.dof_vel.cpu().numpy()))
         self.render()
         self.post_physics_step()
 
@@ -569,8 +569,58 @@ class TrainEnv:
         obs, privileged_obs, _, _, _ = self.step(torch.zeros(self.num_envs, self.num_actions, device=self.device, requires_grad=False))
         return obs, privileged_obs
     def reset_idx(self, env_ids):
-        """Reset selected robots"""
-        pass
+        """ Reset some environments.
+            Calls self._reset_dofs(env_ids), self._reset_root_states(env_ids), and self._resample_commands(env_ids)
+            [Optional] calls self._update_terrain_curriculum(env_ids), self.update_command_curriculum(env_ids) and
+            Logs episode info
+            Resets some buffers
+
+        Args:
+            env_ids (list[int]): List of environment ids which must be reset
+        """
+        if len(env_ids) == 0:
+            return
+        # reset robot states
+        self._reset_dofs(env_ids)
+        self._reset_root_states(env_ids)
+
+        # reset buffers
+        self.last_actions[env_ids] = 0.
+        self.last_dof_vel[env_ids] = 0.
+        self.feet_air_time[env_ids] = 0.
+        self.episode_length_buf[env_ids] = 0
+        self.reset_buf[env_ids] = 1
+    def _reset_dofs(self, env_ids):
+        """ Resets DOF position and velocities of selected environmments
+        Positions are randomly selected within 0.5:1.5 x default positions.
+        Velocities are set to zero.
+
+        Args:
+            env_ids (List[int]): Environemnt ids
+        """
+        self.dof_pos[env_ids] = self.default_dof_pos * torch_rand_float(0.5, 1.5, (len(env_ids), self.num_dofs), device=self.device)
+        self.dof_vel[env_ids] = 0.
+
+        env_ids_int32 = env_ids.to(dtype=torch.int32)
+        self.gym.set_dof_state_tensor_indexed(self.sim,
+                                              gymtorch.unwrap_tensor(self.dof_state),
+                                              gymtorch.unwrap_tensor(env_ids_int32), len(env_ids_int32))
+    def _reset_root_states(self, env_ids):
+        """ Resets ROOT states position and velocities of selected environmments
+            Sets base position based on the curriculum
+            Selects randomized base velocities within -0.5:0.5 [m/s, rad/s]
+        Args:
+            env_ids (List[int]): Environemnt ids
+        """
+        # base position
+        self.root_states[env_ids] = self.base_init_state
+        self.root_states[env_ids, :3] += self.env_origins[env_ids]
+        # base velocities
+        self.root_states[env_ids, 7:13] = torch_rand_float(-0.5, 0.5, (len(env_ids), 6), device=self.device) # [7:10]: lin vel, [10:13]: ang vel
+        env_ids_int32 = env_ids.to(dtype=torch.int32)
+        self.gym.set_actor_root_state_tensor_indexed(self.sim,
+                                                     gymtorch.unwrap_tensor(self.root_states),
+                                                     gymtorch.unwrap_tensor(env_ids_int32), len(env_ids_int32))
     #-----------3. get methods----------------
     def get_observations(self):
         return self.obs_buf
