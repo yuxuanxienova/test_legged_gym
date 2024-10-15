@@ -27,6 +27,7 @@ class TrainEnv:
         self.sim_params.use_gpu_pipeline = sim_cfg_class.use_gpu_pipeline #use GPU pipeline, False for CPU pipeline
         self.sim_params.substeps = sim_cfg_class.substeps
         self.device = sim_cfg_class.device
+        self.headless = sim_cfg_class.headless
         #parse physx params
         self.sim_params.physx.num_threads = sim_cfg_class.physx.num_threads
         self.sim_params.physx.solver_type = sim_cfg_class.physx.solver_type
@@ -209,8 +210,9 @@ class TrainEnv:
         self.gym.prepare_sim(self.sim)
 
         #set the viewer
-        cam_props = gymapi.CameraProperties()
-        self.viewer = self.gym.create_viewer(self.sim, cam_props)
+        if not self.headless:
+            cam_props = gymapi.CameraProperties()
+            self.viewer = self.gym.create_viewer(self.sim, cam_props)
         
         self._init_buffers()
         self._prepare_reward_function()
@@ -417,7 +419,8 @@ class TrainEnv:
                 self.gym.fetch_results(self.sim, True)
             self.gym.refresh_dof_state_tensor(self.sim)
 
-        self.render()
+        if not self.headless:
+            self.render()
         self.post_physics_step()
 
         # return clipped obs, clipped states (None), rewards, dones and infos

@@ -5,6 +5,7 @@ class SimConfig():
   gravity = [0., 0. ,-9.81]  # [m/s^2]
   use_gpu_pipeline = True
   device="cuda"
+  headless = True#True means no rendering
   class physx:
       num_threads = 10
       solver_type = 1  # 0: pgs, 1: tgs

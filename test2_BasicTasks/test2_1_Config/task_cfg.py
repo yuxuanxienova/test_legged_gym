@@ -4,7 +4,7 @@ sys.path.append(os.path.dirname(os.path.dirname(os.path.dirname(__file__))))
 from test2_BasicTasks.utils import class_to_dict
 class TaskConfig():
     class env:
-        num_envs= 2
+        num_envs= 4096
         num_observations = 48
         num_privileged_obs = None # If not None, a privileged_obs_buf will be returned by step() (critic obs for asymmetric training). None is returned otherwise
         num_actions = 12
