@@ -191,7 +191,7 @@ class BaseEnv:
         self.viewer = self.gym.create_viewer(self.sim, cam_props)
         
         self._init_buffers()
-        self._prepare_reward_function()
+        # self._prepare_reward_function()
         self.init_done = True
     def _init_buffers(self):
         """ Initialize torch tensors which will contain simulation states and processed quantities
@@ -350,31 +350,7 @@ class BaseEnv:
             rng = self.domain_rand_added_mass_range
             props[0].mass += np.random.uniform(rng[0], rng[1])
         return props
-    def _prepare_reward_function(self):
-        """ Prepares a list of reward functions, whcih will be called to compute the total reward.
-            Looks for self._reward_<REWARD_NAME>, where <REWARD_NAME> are names of all non zero reward scales in the cfg.
-        """
-        # remove zero scales + multiply non-zero ones by dt
-        for key in list(self.reward_scales.keys()):
-            scale = self.reward_scales[key]
-            if scale==0:
-                self.reward_scales.pop(key) 
-            else:
-                self.reward_scales[key] *= self.dt
-        # prepare list of functions
-        self.reward_functions = []
-        self.reward_names = []
-        for name, scale in self.reward_scales.items():
-            if name=="termination":
-                continue
-            self.reward_names.append(name)
-            name = '_reward_' + name
-            self.reward_functions.append(getattr(self, name))
 
-        # reward episode sums
-        self.episode_sums = {name: torch.zeros(self.num_envs, dtype=torch.float, device=self.device, requires_grad=False)
-                             for name in self.reward_scales.keys()}
-    
     #-----------1. Step the Environment----------------
     def step(self,actions):
         """

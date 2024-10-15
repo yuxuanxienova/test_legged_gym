@@ -1,6 +1,6 @@
 
 class SimConfig():
-  dt =  0.005
+  dt =  0.005#1/240.  # [s]
   substeps = 1
   gravity = [0., 0. ,-9.81]  # [m/s^2]
   use_gpu_pipeline = True

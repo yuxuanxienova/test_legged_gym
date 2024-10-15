@@ -25,6 +25,7 @@ class TrainEnv:
         self.up_axis_idx = 2 # 2 for z, 1 for y -> adapt gravity accordingly
         self.sim_params.gravity = gymapi.Vec3(*sim_cfg_class.gravity)
         self.sim_params.use_gpu_pipeline = sim_cfg_class.use_gpu_pipeline #use GPU pipeline, False for CPU pipeline
+        self.sim_params.substeps = sim_cfg_class.substeps
         self.device = sim_cfg_class.device
         #parse physx params
         self.sim_params.physx.num_threads = sim_cfg_class.physx.num_threads
@@ -96,10 +97,10 @@ class TrainEnv:
         asset_options.disable_gravity = task_cfg_class.asset.disable_gravity
 
         #compute other quantities
-        self.dt  = self.task_cfg_class.control.decimation * self.sim_params.dt
+        self.control_dt  = self.task_cfg_class.control.decimation * self.sim_params.dt
         self.max_episode_length_s = self.episode_length_s
-        self.max_episode_length = np.ceil(self.max_episode_length_s / self.dt).astype(int)
-        self.task_cfg_class.domain_rand.push_interval = np.ceil(self.task_cfg_class.domain_rand.push_interval_s / self.dt)
+        self.max_episode_length = np.ceil(self.max_episode_length_s / self.control_dt).astype(int)
+        self.task_cfg_class.domain_rand.push_interval = np.ceil(self.task_cfg_class.domain_rand.push_interval_s / self.control_dt)
 
 
 
@@ -237,7 +238,7 @@ class TrainEnv:
 
         # initialize some data used later on
         self.common_step_counter = 0
-        self.extras = {}
+        self.logs = {}
         self.noise_scale_vec = self._get_noise_scale_vec()
         self.gravity_vec = to_torch(get_axis_params(-1., self.up_axis_idx), device=self.device).repeat((self.num_envs, 1))
         self.forward_vec = to_torch([1., 0., 0.], device=self.device).repeat((self.num_envs, 1))
@@ -382,7 +383,7 @@ class TrainEnv:
             if scale==0:
                 self.reward_scales.pop(key) 
             else:
-                self.reward_scales[key] *= self.dt
+                self.reward_scales[key] *= self.control_dt
         # prepare list of functions
         self.reward_functions = []
         self.reward_names = []
@@ -402,18 +403,20 @@ class TrainEnv:
         """
         actions (torch.Tensor):  Dim:(num_envs, num_actions_per_env)
         """
+        #control loop: interval = control.decimation * sim_params.dt (4 * 0.005 = 0.02[s])
         action_bound = self.task_cfg_class.normalization.clip_actions
         self.actions = torch.clip(actions, -action_bound, action_bound)
-
-        # self.actions = self.actions.to(self.device)
+        
         
         for _ in range(self.task_cfg_class.control.decimation):
+            #simulation loop: interval = sim_params.dt (0.005=1/240[s])
             self.torques = self._compute_torques(self.actions).view(self.torques.shape)
             self.gym.set_dof_actuation_force_tensor(self.sim, gymtorch.unwrap_tensor(self.torques))
             self.gym.simulate(self.sim)
             if(self.device != "cpu"):
                 self.gym.fetch_results(self.sim, True)
             self.gym.refresh_dof_state_tensor(self.sim)
+
         self.render()
         self.post_physics_step()
 
@@ -424,7 +427,7 @@ class TrainEnv:
         # print("[INFO][step={0}] rewards: {1}".format(self.common_step_counter,np.mean(self.rew_buf.cpu().numpy())))
         if self.privileged_obs_buf is not None:
             self.privileged_obs_buf = torch.clip(self.privileged_obs_buf, -clip_obs, clip_obs)
-        return self.obs_buf, self.privileged_obs_buf, self.rew_buf, self.reset_buf, self.extras
+        return self.obs_buf, self.privileged_obs_buf, self.rew_buf, self.reset_buf, self.logs
     def _compute_torques(self, actions):
         """ Compute torques from actions.
             Actions can be interpreted as position or velocity targets given to a PD controller, or directly as scaled torques.
@@ -466,7 +469,7 @@ class TrainEnv:
         self.projected_gravity[:] = quat_rotate_inverse(self.base_quat, self.gravity_vec)
 
         # Compute ang vel command based on target and heading
-        env_ids = (self.episode_length_buf % int(self.task_cfg_class.commands.resampling_time / self.dt)==0).nonzero(as_tuple=False).flatten()
+        env_ids = (self.episode_length_buf % int(self.task_cfg_class.commands.resampling_time / self.control_dt)==0).nonzero(as_tuple=False).flatten()
         self._resample_commands(env_ids)
         if self.task_cfg_class.commands.heading_command:
             forward = quat_apply(self.base_quat, self.forward_vec)
@@ -590,6 +593,12 @@ class TrainEnv:
         self.feet_air_time[env_ids] = 0.
         self.episode_length_buf[env_ids] = 0
         self.reset_buf[env_ids] = 1
+
+        # fill logs
+        self.logs["episode"] = {}
+        for key in self.episode_sums.keys():
+            self.logs["episode"]['rew_' + key] = torch.mean(self.episode_sums[key][env_ids]) / self.max_episode_length_s
+            self.episode_sums[key][env_ids] = 0.
     def _reset_dofs(self, env_ids):
         """ Resets DOF position and velocities of selected environmments
         Positions are randomly selected within 0.5:1.5 x default positions.
@@ -648,7 +657,7 @@ class TrainEnv:
         return torch.sum(torch.square(self.dof_vel), dim=1)
     def _reward_dof_acc(self):
         # Penalize dof accelerations
-        return torch.sum(torch.square((self.last_dof_vel - self.dof_vel) / self.dt), dim=1)
+        return torch.sum(torch.square((self.last_dof_vel - self.dof_vel) / self.control_dt), dim=1)
     def _reward_action_rate(self):
         # Penalize changes in actions
         return torch.sum(torch.square(self.last_actions - self.actions), dim=1)
@@ -685,7 +694,7 @@ class TrainEnv:
         contact_filt = torch.logical_or(contact, self.last_contacts) 
         self.last_contacts = contact
         first_contact = (self.feet_air_time > 0.) * contact_filt
-        self.feet_air_time += self.dt
+        self.feet_air_time += self.control_dt
         rew_airTime = torch.sum((self.feet_air_time - 0.5) * first_contact, dim=1) # reward only on first contact with the ground
         rew_airTime *= torch.norm(self.commands[:, :2], dim=1) > 0.1 #no reward for zero command
         self.feet_air_time *= ~contact_filt
