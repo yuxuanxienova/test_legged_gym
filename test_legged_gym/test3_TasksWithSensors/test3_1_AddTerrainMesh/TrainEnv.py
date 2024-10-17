@@ -8,6 +8,7 @@ from isaacgym.torch_utils import quat_rotate_inverse, to_torch, get_axis_params,
 from test_legged_gym.utils.conversion_utils import class_to_dict
 from test_legged_gym.utils.math_utils import quat_apply_yaw,wrap_to_pi
 from test_legged_gym.utils.warp_utils import ray_cast
+import trimesh
 class TrainEnv:
     #-----------0. Initialize the Environment----------------
     def __init__(self, task_cfg_class, sim_cfg_class):
@@ -110,9 +111,51 @@ class TrainEnv:
         #1.2 Create the Simulator
         self.sim = self.gym.create_sim(compute_device=0, graphics_device=0, type=gymapi.SIM_PHYSX, params=self.sim_params)
 
-        #1.3 Create Ground Plane
-        #create the graound plane
-        self.gym.add_ground(self.sim, plane_params)
+        # 1.3 Create Terrain Mesh (replace ground plane)
+
+        # Load your terrain mesh here
+        asset_root = os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(__file__))),"assets")
+        terrain_file = "/terrain/simple_terrain.obj"
+
+
+        # Load the terrain mesh from a .obj file
+        mesh = trimesh.load(asset_root + terrain_file)  # Replace 'terrain.obj' with your mesh file path
+        # Calculate the center of the mesh
+        mesh_center = mesh.centroid
+
+        # Optionally, translate the mesh so that its center is at the origin
+        mesh.apply_translation(-mesh_center)
+        # Extract vertices and triangle indices from the mesh
+        vertices = np.array(mesh.vertices, dtype=np.float32)
+        triangles = np.array(mesh.faces, dtype=np.uint32)
+
+        # Create triangle mesh parameters
+        tm_params = gymapi.TriangleMeshParams()
+        tm_params.nb_vertices = vertices.shape[0]
+        tm_params.nb_triangles = triangles.shape[0]
+
+        # Set the position and rotation of the terrain mesh
+        tm_params.transform = gymapi.Transform()
+
+        # Set the heading direction (rotation around Z-axis)
+        heading_angle_degrees = 90  # Replace with your desired angle in degrees
+        heading_angle_radians = np.deg2rad(heading_angle_degrees)
+
+        # Create a quaternion representing the rotation around the Z-axis
+        rotation_axis = gymapi.Vec3(1.0, 0.0, 0.0)  # Rotate around Z-axis
+        rotation_quat = gymapi.Quat.from_axis_angle(rotation_axis, heading_angle_radians)
+        tm_params.transform.r = rotation_quat
+
+        # Optionally, set the position of the terrain mesh
+        tm_params.transform.p = gymapi.Vec3(0.0, 0.0, 0.0)  # Adjust as needed
+
+        # Set friction and restitution
+        tm_params.static_friction = 0.5
+        tm_params.dynamic_friction = 0.5
+        tm_params.restitution = 0.0
+
+        # Add the terrain mesh to the simulation
+        self.gym.add_triangle_mesh(self.sim, vertices.flatten(), triangles.flatten(), tm_params)
 
         # optimization flags for pytorch JIT
         torch._C._jit_set_profiling_mode(False)
@@ -177,7 +220,9 @@ class TrainEnv:
             env_handle = self.gym.create_env(self.sim, env_lower, env_upper, int(np.sqrt(self.num_envs)))
             pos_env_origin = self.env_origins[i].clone()
             pos_env_origin[:2] += torch_rand_float(-1., 1., (2,1), device=self.device).squeeze(1)
-            start_pose.p = gymapi.Vec3(pos_env_origin[0]+self.initial_state_pos[0] ,pos_env_origin[1]+self.initial_state_pos[1],pos_env_origin[2]+self.initial_state_pos[2])
+            # start_pose.p = gymapi.Vec3(pos_env_origin[0]+self.initial_state_pos[0] ,pos_env_origin[1]+self.initial_state_pos[1],pos_env_origin[2]+self.initial_state_pos[2])
+            start_pose.p = gymapi.Vec3(0,0,0.6)
+            print("[INFO]start_pose.p: {0}".format(start_pose.p))
                 
             rigid_shape_props = self._process_rigid_shape_props(rigid_shape_props_asset, i)
             self.gym.set_asset_rigid_shape_properties(robot, rigid_shape_props)
