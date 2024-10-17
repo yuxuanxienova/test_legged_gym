@@ -1,9 +1,9 @@
 import os
-from test_legged_gym.test2_BasicTasks.test2_1_Config.task_cfg import TaskConfig
-from test_legged_gym.test2_BasicTasks.test2_1_Config.sim_cfg import SimConfig
-from test_legged_gym.test2_BasicTasks.test2_1_Config.train_cfg import TrainConfig
-from test_legged_gym.test2_BasicTasks.utils import class_to_dict
-from test_legged_gym.test2_BasicTasks.test2_3_SimpleTrainingEnv.TrainEnv import TrainEnv
+from test_legged_gym.test3_TasksWithSensors.test3_1_AddTerrainMesh.task_cfg import TaskConfig
+from test_legged_gym.test3_TasksWithSensors.test3_1_AddTerrainMesh.sim_cfg import SimConfig
+from test_legged_gym.test3_TasksWithSensors.test3_1_AddTerrainMesh.train_cfg import TrainConfig
+from test_legged_gym.utils.conversion_utils import class_to_dict
+from test_legged_gym.test3_TasksWithSensors.test3_1_AddTerrainMesh.TrainEnv import TrainEnv
 from test_legged_gym.rsl_rl.runners.on_policy_runner import OnPolicyRunner
 
 if __name__ == "__main__":

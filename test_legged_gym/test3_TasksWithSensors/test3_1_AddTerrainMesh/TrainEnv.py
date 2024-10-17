@@ -5,7 +5,9 @@ import numpy as np
 import torch
 import sys
 from isaacgym.torch_utils import quat_rotate_inverse, to_torch, get_axis_params, torch_rand_float, quat_apply
-from test_legged_gym.test2_BasicTasks.utils import class_to_dict, wrap_to_pi
+from test_legged_gym.utils.conversion_utils import class_to_dict
+from test_legged_gym.utils.math_utils import quat_apply_yaw,wrap_to_pi
+from test_legged_gym.utils.warp_utils import ray_cast
 class TrainEnv:
     #-----------0. Initialize the Environment----------------
     def __init__(self, task_cfg_class, sim_cfg_class):
@@ -105,7 +107,7 @@ class TrainEnv:
         #1.1 reate GymAPI Instance
         self.gym = gymapi.acquire_gym()
 
-        #1.2 Create the SImulator
+        #1.2 Create the Simulator
         self.sim = self.gym.create_sim(compute_device=0, graphics_device=0, type=gymapi.SIM_PHYSX, params=self.sim_params)
 
         #1.3 Create Ground Plane
@@ -127,26 +129,26 @@ class TrainEnv:
         else: 
             self.privileged_obs_buf = None
 
-        #2.--------------------Construct a Environment----------------
+        #--------------------2. Construct a Environment----------------
         #2.0 Load an Asset
         asset_root = os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(__file__))),"assets")
         asset_file = "anymal_c/urdf/anymal_c.urdf"        
 
         #load the asset
-        robot_asset = self.gym.load_asset(self.sim, asset_root, asset_file, asset_options)
-        if robot_asset is None:
+        robot = self.gym.load_asset(self.sim, asset_root, asset_file, asset_options)
+        if robot is None:
             print("Failed to load asset at:", os.path.join(asset_root, asset_file))
             sys.exit(1)
         else:
             print("Successfully loaded asset:", os.path.join(asset_root, asset_file))
 
         #get the asset properties
-        self.num_dofs = self.gym.get_asset_dof_count(robot_asset)
-        self.num_bodies = self.gym.get_asset_rigid_body_count(robot_asset)
-        dof_props_asset = self.gym.get_asset_dof_properties(robot_asset)
-        rigid_shape_props_asset = self.gym.get_asset_rigid_shape_properties(robot_asset)
-        body_names = self.gym.get_asset_rigid_body_names(robot_asset)
-        self.dof_names = self.gym.get_asset_dof_names(robot_asset)
+        self.num_dofs = self.gym.get_asset_dof_count(robot)
+        self.num_bodies = self.gym.get_asset_rigid_body_count(robot)
+        dof_props_asset = self.gym.get_asset_dof_properties(robot)
+        rigid_shape_props_asset = self.gym.get_asset_rigid_shape_properties(robot)
+        body_names = self.gym.get_asset_rigid_body_names(robot)
+        self.dof_names = self.gym.get_asset_dof_names(robot)
         feet_names = [s for s in body_names if self.task_cfg_class.asset.foot_name in s]
         penalized_contact_names = []
         for name in self.task_cfg_class.asset.penalize_contacts_on:
@@ -178,9 +180,9 @@ class TrainEnv:
             start_pose.p = gymapi.Vec3(pos_env_origin[0]+self.initial_state_pos[0] ,pos_env_origin[1]+self.initial_state_pos[1],pos_env_origin[2]+self.initial_state_pos[2])
                 
             rigid_shape_props = self._process_rigid_shape_props(rigid_shape_props_asset, i)
-            self.gym.set_asset_rigid_shape_properties(robot_asset, rigid_shape_props)
+            self.gym.set_asset_rigid_shape_properties(robot, rigid_shape_props)
 
-            actor_handle = self.gym.create_actor(env_handle, robot_asset, start_pose, self.asset_name, i, self.asset_self_collisions, 0)
+            actor_handle = self.gym.create_actor(env_handle, robot, start_pose, self.asset_name, i, self.asset_self_collisions, 0)
 
             dof_props = self._process_dof_props(dof_props_asset, i)
             self.gym.set_actor_dof_properties(env_handle, actor_handle, dof_props)
@@ -201,18 +203,20 @@ class TrainEnv:
         self.termination_contact_indices = torch.zeros(len(termination_contact_names), dtype=torch.long, device=self.device, requires_grad=False)
         for i in range(len(termination_contact_names)):
             self.termination_contact_indices[i] = self.gym.find_actor_rigid_body_handle(self.envs[0], self.actor_handles[0], termination_contact_names[i])
-        #3.----------------------Simulation and Rendering Loop------------------------
-
-        # Prepare the simulator after all assets and environments have been added
+        #----------------------3. Prepare Other Modules------------------------
+        #3.1 Prepare the simulator
         self.gym.prepare_sim(self.sim)
 
-        #set the viewer
+        #3.2 Prepare the viewer
         if not self.headless:
             cam_props = gymapi.CameraProperties()
             self.viewer = self.gym.create_viewer(self.sim, cam_props)
-        
+        #3.3 Prepare the buffers
         self._init_buffers()
+
+        #3.4 Prepare the reward function
         self._prepare_reward_function()
+
         self.init_done = True
     def _init_buffers(self):
         """ Initialize torch tensors which will contain simulation states and processed quantities
