@@ -4,7 +4,7 @@ from test_legged_gym.test3_TasksWithSensors.test3_2_SimpleRaycaster.sim_cfg impo
 from test_legged_gym.test3_TasksWithSensors.test3_2_SimpleRaycaster.train_cfg import TrainConfig
 from test_legged_gym.utils.conversion_utils import class_to_dict
 from test_legged_gym.test3_TasksWithSensors.test3_2_SimpleRaycaster.TrainEnv import TrainEnv
-from rsl_rl.runners.on_policy_runner import OnPolicyRunner
+from test_legged_gym.rsl_rl.runners.on_policy_runner import OnPolicyRunner
 
 if __name__ == "__main__":
     log_dir = os.path.join(os.path.dirname(__file__), "logs")

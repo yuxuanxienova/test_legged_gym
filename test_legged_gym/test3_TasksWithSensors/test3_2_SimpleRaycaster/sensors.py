@@ -28,19 +28,21 @@ class Raycaster(SensorBase):
     def __init__(self, cfg: RaycasterCfg, env ):
         #1. Configuration and Environment Setup
         self.cfg = cfg
+        self.env=env
         # self.terrain_mesh = env.terrain.wp_meshes[self.cfg.terrain_mesh_name]
-        self.terrain_mesh = env.terrain.get_wp_mesh_from_names(self.cfg.terrain_mesh_names)
-        self.robot = getattr(env, cfg.robot_name)
-        self.body_idx, _ = self.robot.find_bodies(cfg.body_attachement_name)#index of the robot's body part where the sensor is attached 
-        self.num_envs = self.robot.num_envs
-        self.device = self.robot.device
+        # self.terrain_mesh = env.terrain.get_wp_mesh_from_names(self.cfg.terrain_mesh_names)
+        self.terrain_mesh = env.wp_terrain_mesh
+
+
+        self.num_envs = self.env.num_envs
+        self.device = self.env.device
 
         #2. Raycasting Setup
-        self.ray_starts, self.pattern_ray_directions = cfg.pattern_cfg.pattern_func(cfg.pattern_cfg, self.device)
-        self.num_rays = len(self.pattern_ray_directions)
+        self.ray_starts, self.pattern_ray_directions = cfg.pattern_cfg.pattern_func(self.device)#Dim:[num_rays,3],Dim:[num_rays,3]
+        self.num_rays = len(self.pattern_ray_directions)#num_rays
 
         #3. Sensor Attachment Transformation
-        offset_pos = torch.tensor(list(cfg.attachement_pos), device=self.device)
+        offset_pos = torch.tensor(list(cfg.attachement_pos), device=env.device)
         offset_quat = torch.tensor(list(cfg.attachement_quat), device=env.device)
         self.ray_directions = quat_apply(
             offset_quat.repeat(len(self.pattern_ray_directions), 1), self.pattern_ray_directions
@@ -57,28 +59,39 @@ class Raycaster(SensorBase):
         self.sphere_geom = None
         self.sphere_geoms = {}
 
-    def update(self, dt, env_ids=...):
+    def update(self, dt, sensor_states,env_ids=...):
         """Perform raycasting on the terrain.
 
         Args:
+            sensor_states (torch.Tensor): Dimensions: [num_envs, 13]. The robot states in quaternion format.
             env_ids (List[int], optional): Subset of environments for which to return the ray hits. Defaults to ....
         """
         #1. Robot State Retrieval
-        states = self.robot.rigid_body_states[env_ids, self.body_idx, :].squeeze(1)
-        pos = states[..., :3]
-        quats = states[..., 3:7]
+        pos = sensor_states[env_ids, :3] + torch.tensor([0,0,0.4]).repeat(len(env_ids),1).to(self.device)#Dim:[num_envs,3]
+        quats = sensor_states[env_ids, 3:7]#Dim:[num_envs,4]
 
         #2. Transforming Rays to World Frame
         if self.cfg.attach_yaw_only:
-            ray_starts_world = quat_apply_yaw(quats.repeat(1, self.num_rays), self.ray_starts[env_ids]) + pos.unsqueeze(
-                1
-            )
-            ray_directions_world = self.ray_directions[env_ids]
+            ray_starts_world = quat_apply_yaw(quats.repeat(1, self.num_rays), self.ray_starts[env_ids]) + pos.unsqueeze(1)#Dim:[num_envs, num_rays, 3]
+            ray_directions_world = self.ray_directions[env_ids]#Dim:[num_envs, num_rays, 3]
         else:
-            ray_starts_world = quat_apply(quats.repeat(1, self.num_rays), self.ray_starts[env_ids]) + pos.unsqueeze(1)
-            ray_directions_world = quat_apply(quats.repeat(1, self.num_rays), self.ray_directions[env_ids])
+            ray_starts_world = quat_apply(quats.repeat(1, self.num_rays), self.ray_starts[env_ids]) + pos.unsqueeze(1)#Dim:[num_envs, num_rays, 3]
+            ray_directions_world = quat_apply(quats.repeat(1, self.num_rays), self.ray_directions[env_ids])#Dim:[num_envs, num_rays, 3]
+
+        #2.(Optional)----Debug Raycasting----
+        # self.num_rays=3
+        # self.ray_hits_world = torch.zeros(self.num_envs, self.num_rays, 3, device=self.device)
+        # self.ray_distances = torch.zeros(self.num_envs, self.num_rays, 1, device=self.device)
+        # ray_starts_debug = torch.tensor([[0,0,0] , [0,0,0] , [0,0,0]]).repeat(len(env_ids),1).to(self.device).float()#Dim:[num_envs,3]
+        # ray_starts_world = quat_apply_yaw(quats.repeat(1, 1), ray_starts_debug ) + pos.unsqueeze(1)
+
+        # ray_directions_debug = torch.tensor([[0,0,-1], [0,1,0] , [1,0,0]]).repeat(len(env_ids),1).to(self.device).float()#Dim:[num_envs,3]
+        # ray_directions_world = quat_apply_yaw(quats.repeat(1, 1), ray_directions_debug) 
+        #-------------------------------
 
         #3. Raycasting
+        #ray_starts_world: torch.Size([num_envs, num_rays, 3])
+        #ray_directions_world: torch.Size([num_envs, num_rays, 3])
         self.ray_hits_world[env_ids], self.ray_distances[env_ids] = ray_cast(
             ray_starts_world, ray_directions_world, self.terrain_mesh
         )
@@ -107,24 +120,9 @@ class Raycaster(SensorBase):
         if self.sphere_geom is None or self.sphere_geom.num_spheres != num_envs * self.num_rays:
             self.sphere_geom = BatchWireframeSphereGeometry(num_envs * self.num_rays, 0.02, 4, 4, None, color=(0, 1, 0))
         
-        #3. Visualize hits with different colors based on friction （Optional）
-        if self.cfg.visualize_friction:
-            frictions = env.terrain.get_frictions(self.ray_hits_world[env_ids])
-            frictions = frictions.view(-1, 1).squeeze(dim=1)
-            unique_frictions = torch.unique(frictions)
-            cmap = plt.get_cmap("jet")
-            colors = torch.zeros((num_envs * self.num_rays, 3)).to(self.device)
-
-            for friction in unique_frictions:
-                cmap_color = cmap((friction.cpu().numpy() + 1.0) / 2.0)  # Map friction to [0, 1]
-                color = torch.tensor(cmap_color[:3]).float().to(self.device)
-                mask = frictions == friction
-                colors[mask] = color
-            self.sphere_geom.draw(
-                self.ray_hits_world[env_ids], env.gym, env.viewer, env.envs[0], colors=colors.cpu().numpy()
-            )
-        else:
-            self.sphere_geom.draw(self.ray_hits_world[env_ids], env.gym, env.viewer, env.envs[0])
+        #3. Drawing Ray Hits
+        env.gym.clear_lines(env.viewer)  
+        self.sphere_geom.draw(self.ray_hits_world[env_ids], env.gym, env.viewer, env.envs[0])
 
     def post_process(self, data: torch.Tensor, env):
         return data

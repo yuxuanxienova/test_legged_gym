@@ -7,9 +7,11 @@ import sys
 from isaacgym.torch_utils import quat_rotate_inverse, to_torch, get_axis_params, torch_rand_float, quat_apply
 from test_legged_gym.utils.conversion_utils import class_to_dict
 from test_legged_gym.utils.math_utils import quat_apply_yaw,wrap_to_pi
-from test_legged_gym.utils.warp_utils import ray_cast
-from test_legged_gym.test3_TasksWithSensors.test3_2_SimpleRaycaster.sensor_cfg import RaycasterCfg
+from test_legged_gym.utils.warp_utils import ray_cast, convert_to_wp_mesh
+from test_legged_gym.test3_TasksWithSensors.test3_2_SimpleRaycaster.sensor_cfg import RaycasterCfg,OmniScanCfg
 from test_legged_gym.test3_TasksWithSensors.test3_2_SimpleRaycaster.sensors import SensorBase,Raycaster
+from test_legged_gym.utils.visualization_utils import BatchWireframeSphereGeometry
+import trimesh
 class TrainEnv:
     #-----------0. Initialize the Environment----------------
     def __init__(self, task_cfg_class, sim_cfg_class):
@@ -112,9 +114,58 @@ class TrainEnv:
         #1.2 Create the Simulator
         self.sim = self.gym.create_sim(compute_device=0, graphics_device=0, type=gymapi.SIM_PHYSX, params=self.sim_params)
 
-        #1.3 Create Ground Plane
-        #create the graound plane
-        self.gym.add_ground(self.sim, plane_params)
+        # 1.3 Create Terrain Mesh (replace ground plane)
+
+        # Load your terrain mesh here
+        asset_root = os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(__file__))), "assets")
+        terrain_file = "/terrain/simple_terrain2.obj"
+
+        # Load the terrain mesh from a .obj file
+        self.terrain_mesh = trimesh.load(asset_root + terrain_file)  # Replace 'terrain.obj' with your mesh file path
+
+        # Calculate the center of the mesh
+        mesh_center = self.terrain_mesh.centroid
+
+        # Optionally, translate the mesh so that its center is at the origin
+        self.terrain_mesh.apply_translation(-mesh_center)
+
+        # Set the heading angle in degrees
+        heading_angle_degrees = 90  # Replace with your desired angle in degrees
+        heading_angle_radians = np.deg2rad(heading_angle_degrees)
+
+        # Set the rotation axis (e.g., Z-axis)
+        rotation_axis = [1.0, 0.0, 0.0]  # Rotate around Z-axis
+
+        # Create the rotation matrix
+        from trimesh.transformations import rotation_matrix
+        R = rotation_matrix(heading_angle_radians, rotation_axis)
+
+        # Apply the rotation to the mesh
+        self.terrain_mesh.apply_transform(R)
+
+        # Extract vertices and triangle indices from the mesh
+        vertices = np.array(self.terrain_mesh.vertices, dtype=np.float32)
+        triangles = np.array(self.terrain_mesh.faces, dtype=np.uint32)
+
+        # Convert to wp mesh
+        self.wp_terrain_mesh = convert_to_wp_mesh(self.terrain_mesh.vertices, self.terrain_mesh.faces, self.device)
+
+        # Create triangle mesh parameters
+        tm_params = gymapi.TriangleMeshParams()
+        tm_params.nb_vertices = vertices.shape[0]
+        tm_params.nb_triangles = triangles.shape[0]
+
+        # Initialize the transform without any rotation
+        tm_params.transform = gymapi.Transform()
+        tm_params.transform.p = gymapi.Vec3(0.0, 0.0, 0.0)  # Adjust as needed
+
+        # Set friction and restitution
+        tm_params.static_friction = 0.5
+        tm_params.dynamic_friction = 0.5
+        tm_params.restitution = 0.0
+
+        # Add the terrain mesh to the simulation
+        self.gym.add_triangle_mesh(self.sim, vertices.flatten(), triangles.flatten(), tm_params)
 
         # optimization flags for pytorch JIT
         torch._C._jit_set_profiling_mode(False)
@@ -137,20 +188,20 @@ class TrainEnv:
         asset_file = "anymal_c/urdf/anymal_c.urdf"        
 
         #load the asset
-        robot = self.gym.load_asset(self.sim, asset_root, asset_file, asset_options)
-        if robot is None:
+        self.robot = self.gym.load_asset(self.sim, asset_root, asset_file, asset_options)
+        if self.robot is None:
             print("Failed to load asset at:", os.path.join(asset_root, asset_file))
             sys.exit(1)
         else:
             print("Successfully loaded asset:", os.path.join(asset_root, asset_file))
 
         #get the asset properties
-        self.num_dofs = self.gym.get_asset_dof_count(robot)
-        self.num_bodies = self.gym.get_asset_rigid_body_count(robot)
-        dof_props_asset = self.gym.get_asset_dof_properties(robot)
-        rigid_shape_props_asset = self.gym.get_asset_rigid_shape_properties(robot)
-        body_names = self.gym.get_asset_rigid_body_names(robot)
-        self.dof_names = self.gym.get_asset_dof_names(robot)
+        self.num_dofs = self.gym.get_asset_dof_count(self.robot)
+        self.num_bodies = self.gym.get_asset_rigid_body_count(self.robot)
+        dof_props_asset = self.gym.get_asset_dof_properties(self.robot)
+        rigid_shape_props_asset = self.gym.get_asset_rigid_shape_properties(self.robot)
+        body_names = self.gym.get_asset_rigid_body_names(self.robot)
+        self.dof_names = self.gym.get_asset_dof_names(self.robot)
         feet_names = [s for s in body_names if self.task_cfg_class.asset.foot_name in s]
         penalized_contact_names = []
         for name in self.task_cfg_class.asset.penalize_contacts_on:
@@ -177,14 +228,17 @@ class TrainEnv:
         for i in range(self.num_envs):
             # create env instance
             env_handle = self.gym.create_env(self.sim, env_lower, env_upper, int(np.sqrt(self.num_envs)))
+
             pos_env_origin = self.env_origins[i].clone()
             pos_env_origin[:2] += torch_rand_float(-1., 1., (2,1), device=self.device).squeeze(1)
-            start_pose.p = gymapi.Vec3(pos_env_origin[0]+self.initial_state_pos[0] ,pos_env_origin[1]+self.initial_state_pos[1],pos_env_origin[2]+self.initial_state_pos[2])
-                
-            rigid_shape_props = self._process_rigid_shape_props(rigid_shape_props_asset, i)
-            self.gym.set_asset_rigid_shape_properties(robot, rigid_shape_props)
+            # start_pose.p = gymapi.Vec3(pos_env_origin[0]+self.initial_state_pos[0] ,pos_env_origin[1]+self.initial_state_pos[1],pos_env_origin[2]+self.initial_state_pos[2])
+            start_pose.p = gymapi.Vec3(0,0,0.6)
+            print("[INFO]start_pose.p: {0}".format(start_pose.p))
 
-            actor_handle = self.gym.create_actor(env_handle, robot, start_pose, self.asset_name, i, self.asset_self_collisions, 0)
+            rigid_shape_props = self._process_rigid_shape_props(rigid_shape_props_asset, i)
+            self.gym.set_asset_rigid_shape_properties(self.robot, rigid_shape_props)
+
+            actor_handle = self.gym.create_actor(env_handle, self.robot, start_pose, self.asset_name, i, self.asset_self_collisions, 0)
 
             dof_props = self._process_dof_props(dof_props_asset, i)
             self.gym.set_actor_dof_properties(env_handle, actor_handle, dof_props)
@@ -220,9 +274,15 @@ class TrainEnv:
         self._prepare_reward_function()
 
         #3.5 Prepare the sensors
-        self.raycaster = Raycaster(RaycasterCfg, self.envs[0])
+        self.raycaster = Raycaster(OmniScanCfg, self)
 
-        self.init_done = True
+        self.init_done = True 
+        #----------------------4. Prepare Debug Usage------------------------
+        self.sphere_geoms_red = BatchWireframeSphereGeometry(num_spheres=1,radius=0.1, num_lats=4, num_lons=4, pose=None, color=(1, 0, 0))
+        self.sphere_geoms_green = BatchWireframeSphereGeometry(num_spheres=1,radius=0.1, num_lats=4, num_lons=4, pose=None, color=(0, 1, 0))
+        self.sphere_geoms_blue = BatchWireframeSphereGeometry(num_spheres=1,radius=0.1, num_lats=4, num_lons=4, pose=None, color=(0, 0, 1))
+        
+
     def _init_buffers(self):
         """ Initialize torch tensors which will contain simulation states and processed quantities
         """
@@ -240,7 +300,7 @@ class TrainEnv:
         self.dof_pos = self.dof_state.view(self.num_envs, self.num_dofs, 2)[..., 0]
         self.dof_vel = self.dof_state.view(self.num_envs, self.num_dofs, 2)[..., 1]
         print("[Debug]self.dof_pos: {0}".format(self.dof_pos.cpu().numpy()))
-        self.base_quat = self.root_states[:, 3:7]
+        
 
         self.contact_forces = gymtorch.wrap_tensor(net_contact_forces).view(self.num_envs, -1, 3) # shape: num_envs, num_bodies, xyz axis
 
@@ -261,8 +321,12 @@ class TrainEnv:
         self.commands_scale = torch.tensor([self.obs_scales.lin_vel, self.obs_scales.lin_vel, self.obs_scales.ang_vel], device=self.device, requires_grad=False,) # TODO change this
         self.feet_air_time = torch.zeros(self.num_envs, self.feet_indices.shape[0], dtype=torch.float, device=self.device, requires_grad=False)
         self.last_contacts = torch.zeros(self.num_envs, len(self.feet_indices), dtype=torch.bool, device=self.device, requires_grad=False)
+        #root states:(13_state = 3_pos + 4_quat + 3_lin_vel + 3_ang_vel)
+        self.base_pos = self.root_states[:, 0:3]
+        self.base_quat = self.root_states[:, 3:7]
         self.base_lin_vel = quat_rotate_inverse(self.base_quat, self.root_states[:, 7:10])
         self.base_ang_vel = quat_rotate_inverse(self.base_quat, self.root_states[:, 10:13])
+
         self.projected_gravity = quat_rotate_inverse(self.base_quat, self.gravity_vec)
         self.measured_heights = 0
 
@@ -424,7 +488,7 @@ class TrainEnv:
             if(self.device != "cpu"):
                 self.gym.fetch_results(self.sim, True)
             self.gym.refresh_dof_state_tensor(self.sim)
-            self.raycaster.update(dt=self.sim_params.dt)
+            self.raycaster.update(dt=self.sim_params.dt, sensor_states=self.root_states,env_ids=[0])
 
         if not self.headless:
             self.render()
@@ -473,6 +537,7 @@ class TrainEnv:
         self.common_step_counter += 1
 
         # prepare quantities
+        self.base_pos = self.root_states[:, 0:3]
         self.base_quat[:] = self.root_states[:, 3:7]
         self.base_lin_vel[:] = quat_rotate_inverse(self.base_quat, self.root_states[:, 7:10])
         self.base_ang_vel[:] = quat_rotate_inverse(self.base_quat, self.root_states[:, 10:13])
@@ -575,8 +640,21 @@ class TrainEnv:
         self.gym.draw_viewer(self.viewer, self.sim, True)
         #step the graphics
         self.gym.sync_frame_time(self.sim)
-        #
-        self.raycaster.debug_vis(self.envs[0])
+        self._render_degub_vis()
+
+    def _render_degub_vis(self):
+        #Drawing Raycast
+        self.raycaster.debug_vis(self)
+        #Drawing the Axis
+        sphere_pos_init = self.base_init_state[:3].unsqueeze(0)
+        self.sphere_geoms_red.draw(sphere_pos_init , self.gym, self.viewer, self.envs[0])
+        x_offset = torch.tensor([0.5,0,0],device=self.device)
+        y_offset = torch.tensor([0,0.5,0],device=self.device)
+        z_offset = torch.tensor([0,0,0.5],device=self.device)
+        self.sphere_geoms_red.draw(sphere_pos_init + x_offset, self.gym, self.viewer, self.envs[0])
+        self.sphere_geoms_green.draw(sphere_pos_init + y_offset, self.gym, self.viewer, self.envs[0])
+        self.sphere_geoms_blue.draw(sphere_pos_init + z_offset, self.gym, self.viewer, self.envs[0])
+
     #-----------2. Reset the Environment----------------
     def reset(self):
         """ Reset all robots"""

@@ -45,7 +45,7 @@ class TaskConfig():
             ang_vel_yaw = [-1, 1]    # min max [rad/s]
             heading = [-3.14, 3.14]
     class init_state:
-        pos = [0.0, 0.0, 0.6] # x,y,z [m]
+        pos = [0.0, 0.0, -2.5] # x,y,z [m]
         rot = [0.0, 0.0, 0.0, 1.0] # x,y,z,w [quat]
         lin_vel = [0.0, 0.0, 0.0]  # x,y,z [m/s]
         ang_vel = [0.0, 0.0, 0.0]  # x,y,z [rad/s]
