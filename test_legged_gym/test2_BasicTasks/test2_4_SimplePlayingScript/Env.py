@@ -6,13 +6,14 @@ import torch
 import sys
 from isaacgym.torch_utils import quat_rotate_inverse, to_torch, get_axis_params, torch_rand_float, quat_apply
 from test_legged_gym.test2_BasicTasks.utils import class_to_dict, wrap_to_pi
+from test_legged_gym.utils.visualization_utils import BatchWireframeSphereGeometry
 class Env:
     #-----------0. Initialize the Environment----------------
     def __init__(self, task_cfg_class, sim_cfg_class):
         #-----------1. Initialize GymAPI ,Simulator----------------
         self.task_cfg_class = task_cfg_class
         self.sim_cfg_class = sim_cfg_class
-
+        self.playing_mode = False
         #1.0 Parse Configs
 
         #parse sim params
@@ -213,7 +214,16 @@ class Env:
         
         self._init_buffers()
         self._prepare_reward_function()
+
+        #----------------------4. Prepare Debug Usage------------------------
+        self.sphere_geoms_red = BatchWireframeSphereGeometry(num_spheres=1,radius=0.1, num_lats=4, num_lons=4, pose=None, color=(1, 0, 0))
+        self.sphere_geoms_green = BatchWireframeSphereGeometry(num_spheres=1,radius=0.1, num_lats=4, num_lons=4, pose=None, color=(0, 1, 0))
+        self.sphere_geoms_blue = BatchWireframeSphereGeometry(num_spheres=1,radius=0.1, num_lats=4, num_lons=4, pose=None, color=(0, 0, 1))
+        self.target_pos = None
+
         self.init_done = True
+
+
     def _init_buffers(self):
         """ Initialize torch tensors which will contain simulation states and processed quantities
         """
@@ -231,6 +241,7 @@ class Env:
         self.dof_pos = self.dof_state.view(self.num_envs, self.num_dofs, 2)[..., 0]
         self.dof_vel = self.dof_state.view(self.num_envs, self.num_dofs, 2)[..., 1]
         print("[Debug]self.dof_pos: {0}".format(self.dof_pos.cpu().numpy()))
+        self.base_pos = self.root_states[:, 0:3]
         self.base_quat = self.root_states[:, 3:7]
 
         self.contact_forces = gymtorch.wrap_tensor(net_contact_forces).view(self.num_envs, -1, 3) # shape: num_envs, num_bodies, xyz axis
@@ -463,6 +474,7 @@ class Env:
         self.common_step_counter += 1
 
         # prepare quantities
+        self.base_pos = self.root_states[:, 0:3]
         self.base_quat[:] = self.root_states[:, 3:7]
         self.base_lin_vel[:] = quat_rotate_inverse(self.base_quat, self.root_states[:, 7:10])
         self.base_ang_vel[:] = quat_rotate_inverse(self.base_quat, self.root_states[:, 10:13])
@@ -470,10 +482,14 @@ class Env:
 
         # Compute ang vel command based on target and heading
         env_ids = (self.episode_length_buf % int(self.task_cfg_class.commands.resampling_time / self.control_dt)==0).nonzero(as_tuple=False).flatten()
-        self._resample_commands(env_ids)
+
+        if self.playing_mode is False:
+            self._resample_commands(env_ids)
+
         if self.task_cfg_class.commands.heading_command:
             forward = quat_apply(self.base_quat, self.forward_vec)
             heading = torch.atan2(forward[:, 1], forward[:, 0])
+            # compute ang vel command based on base heading to target heading
             self.commands[:, 2] = torch.clip(0.5*wrap_to_pi(self.commands[:, 3] - heading), -1., 1.)
 
         # compute measured terrain heights
@@ -511,6 +527,42 @@ class Env:
 
         # set small commands to zero
         self.commands[env_ids, :2] *= (torch.norm(self.commands[env_ids, :2], dim=1) > 0.2).unsqueeze(1)
+    def apply_command_position(self, env_ids, target_pos):
+        """Move to target position by setting lin_vel_x, lin_vel_y, and heading commands
+
+        Args:
+            env_ids (List[int]): Environment IDs where the command should be applied
+            pos (torch.Tensor or np.ndarray): Target positions with shape (len(env_ids), 2)
+                where pos[:, 0] is x and pos[:, 1] is y
+        """
+        # Ensure pos is a torch tensor
+        if not isinstance(target_pos, torch.Tensor):
+            target_pos = torch.tensor(target_pos, dtype=torch.float32, device=self.device)
+        else:
+            target_pos = target_pos.to(self.device)
+        # Retrieve current positions; implement this method based on your Env class
+        current_positions = self.base_pos[env_ids][0:2]  # Shape: (len(env_ids), 2)
+        # Calculate the difference between target and current positions
+        delta_pos = target_pos - current_positions  # Shape: (len(env_ids), 2)
+        #Calculate desired velocity based on the distance to the target
+        max_speed = self.commands_ranges["lin_vel_x"][1]  # Assuming same max for x and y
+        distances = torch.norm(delta_pos)  # Shape: (len(env_ids), 1)
+        desired_vel = torch.where(
+            distances > 1.0,  
+            (delta_pos / distances) * max_speed,
+            delta_pos  # Directly use delta_pos when close to the target
+        )
+        # Set the linear velocity commands
+        self.commands[env_ids, 0:2] = desired_vel  # lin_vel_x and lin_vel_y
+        if self.task_cfg_class.commands.heading_command:
+            # Calculate desired heading based on the velocity direction
+            desired_heading = torch.atan2(desired_vel[1], desired_vel[0])  # Shape: (len(env_ids),)
+            self.commands[env_ids, 3] = desired_heading
+
+        #Store for Draw the target position
+        self.target_pos = target_pos
+        
+
     def _push_robots(self):
         """ Random pushes the robots. Emulates an impulse by setting a randomized base velocity. 
         """
@@ -565,6 +617,12 @@ class Env:
         self.gym.draw_viewer(self.viewer, self.sim, True)
         #step the graphics
         self.gym.sync_frame_time(self.sim)
+        self._draw_debug_vis()
+    def _draw_debug_vis(self):
+        self.gym.clear_lines(self.viewer) 
+        if self.target_pos is not None:
+            self.sphere_geoms_red.draw(torch.tensor([self.target_pos[0],self.target_pos[1],self.base_pos[0][2]]).to(self.device), self.gym, self.viewer, self.envs[0])
+
     #-----------2. Reset the Environment----------------
     def reset(self):
         """ Reset all robots"""
