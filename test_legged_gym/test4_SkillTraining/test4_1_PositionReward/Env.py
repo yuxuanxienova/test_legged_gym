@@ -515,9 +515,9 @@ class Env:
         # set small commands to zero
         self.commands[env_ids, :2] *= (torch.norm(self.commands[env_ids, :2], dim=1) > 0.2).unsqueeze(1)
         #update target position
-        self.target_pos = self.base_pos[env_ids] + torch.cat((self.commands[env_ids, 0:2], torch.zeros(len(env_ids), 1, device=self.device)), dim=1)
-        print("[Debug][_resample_commands]self.target_pos: {0}".format(self.target_pos.cpu().numpy()))
-        print("[Debug][_resample_commands]self.commands: {0}".format(self.commands.cpu().numpy()))
+        self.target_pos[env_ids,:]= self.base_pos[env_ids] + torch.cat((self.commands[env_ids, 0:2], torch.zeros(len(env_ids), 1, device=self.device)), dim=1)
+        # print("[Debug][_resample_commands]self.target_pos: {0}".format(self.target_pos.cpu().numpy()))
+        # print("[Debug][_resample_commands]self.commands: {0}".format(self.commands.cpu().numpy()))
     def apply_command_position(self, env_ids, target_pos):
         """Move to target position by setting lin_vel_x, lin_vel_y, and heading commands
         Args:
@@ -531,15 +531,15 @@ class Env:
         else:
             target_pos = target_pos.to(self.device)
         # Retrieve current positions; implement this method based on your Env class
-        current_positions = self.base_pos[env_ids][0:2]  # Shape: (len(env_ids), 2)
+        current_positions = self.base_pos[:,0:2]  # Shape: (len(env_ids), 2)
         # Calculate the difference between target and current positions
-        delta_pos = target_pos[env_ids][0:2] - current_positions  # Shape: (len(env_ids), 2)
-        self.commands[env_ids, 0] = delta_pos[:, 0]  # Set x position command
-        self.commands[env_ids, 1] = delta_pos[:, 1]  # Set y position command
+        delta_pos = target_pos[:,0:2] - current_positions  # Shape: (len(env_ids), 2)
+        self.commands[env_ids, 0] = delta_pos[env_ids, 0]  # Set x position command
+        self.commands[env_ids, 1] = delta_pos[env_ids, 1]  # Set y position command
         if self.task_cfg_class.commands.heading_command:
             # Calculate desired heading based on the velocity direction
-            desired_heading = torch.atan2(delta_pos[1], delta_pos[0])  # Shape: (len(env_ids),)
-            self.commands[env_ids, 3] = desired_heading
+            desired_heading = torch.atan2(delta_pos[env_ids,1], delta_pos[env_ids,0])  # Shape: (len(env_ids),)
+            self.commands[env_ids, 2] = desired_heading
         #Store for Draw the target position
         self.target_pos = target_pos
         
@@ -679,7 +679,7 @@ class Env:
     Position tracking rewards
     """
     def _reward_tracking_pos2(self):
-        distance = torch.norm(self.target_pos[:][0:2] - self.base_pos[:][0:2], dim=1)
+        distance = torch.norm(self.target_pos[:, :2] - self.base_pos[:, :2], dim=1)
         return (1 - 0.5*distance)
     #--------------------------------
     def _reward_lin_vel_z(self):

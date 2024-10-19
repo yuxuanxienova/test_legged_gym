@@ -7,7 +7,7 @@ class TaskConfig():
         num_privileged_obs = None # If not None, a privileged_obs_buf will be returned by step() (critic obs for asymmetric training). None is returned otherwise
         num_actions = 12
         env_spacing = 3.  # not used with heightfields/trimeshes 
-        episode_length_s = 20  # Episode length in seconds
+        episode_length_s = 10  # Episode length in seconds
     
     class terrain:
         mesh_type = 'plane' # "heightfield" # none, plane, heightfield or trimesh
