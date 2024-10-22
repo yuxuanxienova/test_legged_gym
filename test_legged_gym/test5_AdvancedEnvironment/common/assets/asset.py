@@ -14,7 +14,7 @@ import os
 
 # legged-gym
 from test_legged_gym.test5_AdvancedEnvironment.common.gym_interface import GymInterface
-from test_legged_gym.test5_AdvancedEnvironment.common.assets.asset_cfg import AssetCfg, CuboidAssetCfg, SphereAssetCfg, FileAssetCfg
+from test_legged_gym.test5_AdvancedEnvironment.common.assets.asset_cfg import AssetCfg,FileAssetCfg
 
 
 __all__ = ["CuboidAsset", "SphereAsset", "FileAsset"]

@@ -8,7 +8,7 @@ from isaacgym.torch_utils import quat_apply
 from test_legged_gym.utils.math_utils import matrix_from_quat, quat_apply_yaw, torch_rand_float, yaw_quat, quat_rotate_inverse
 from test_legged_gym.utils.visualization_utils import BatchWireframeSphereGeometry
 from test_legged_gym.utils.warp_utils import ray_cast
-from test_legged_gym.test5_AdvancedEnvironment.common.sensors.sensor_cfg import *
+from test_legged_gym.test5_AdvancedEnvironment.common.sensors.sensors_cfg import *
 
 from typing import TYPE_CHECKING
 
@@ -44,7 +44,7 @@ class Raycaster(SensorBase):
     def __init__(self, cfg: RaycasterCfg, env: "BaseEnv"):
         #1. Configuration and Environment Setup
         self.cfg = cfg
-        self.terrain_mesh = env.terrain.wp_meshes[self.cfg.terrain_mesh_name]
+        self.terrain_mesh = env.terrain.wp_meshes
         self.robot = getattr(env, cfg.robot_name)
         self.body_idx, _ = self.robot.find_bodies(cfg.body_attachement_name)
         self.num_envs = self.robot.num_envs

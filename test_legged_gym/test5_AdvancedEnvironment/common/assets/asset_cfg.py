@@ -14,7 +14,7 @@ class AssetCfg:
     For available asset options: check :cls:`isaacgym.gymapi.AssetOptions`.
     """
     asset_root = os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(os.path.dirname(__file__)))),"assets")
-    asset_file = "anymal_c/urdf/anymal_c.urdf" 
+    # asset_file = "anymal_c/urdf/anymal_c.urdf" 
     """Path to the asset file.Used by the file asset to load the asset."""
 
     cls_name: str = MISSING
@@ -162,19 +162,14 @@ class FileAssetCfg(AssetCfg):
 
     density: float = 0.001  # Avoid adding weight to bodies without inertial properties.
 
-    file: str = MISSING
-    """Path to the asset file.
-    It is possible to specify relative paths with respect to top of the repository using f-strings.
+    asset_file: str = None
+    asset_root: str = None
+    # """Path to the asset file.
+    # It is possible to specify relative paths with respect to top of the repository using f-strings.
 
-    Example:
-        >>> file = "{LEGGED_GYM_ROOT_DIR}/resources/robots/anymal_c/urdf/anymal_c.urdf"
-    """
+    # Example:
+    #     >>> asset_file = "anymal_c/urdf/anymal_c.urdf"
+    # """
 
-if __name__ == "__main__":
-    #check asset file path
-    cfg = AssetCfg()
-    asset_path = os.path.join(cfg.asset_root, cfg.asset_file)
-    if not os.path.exists(asset_path):
-        raise FileNotFoundError(f"Asset file does not exist: {asset_path}")
-    print("Asset file path is correct.")
+
 

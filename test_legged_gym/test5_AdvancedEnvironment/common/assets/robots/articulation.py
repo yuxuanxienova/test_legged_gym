@@ -12,7 +12,9 @@ import torch
 from test_legged_gym.test5_AdvancedEnvironment.common.gym_interface import GymInterface
 from test_legged_gym.test5_AdvancedEnvironment.common.assets.asset import FileAsset
 from test_legged_gym.test5_AdvancedEnvironment.common.assets.robots.articulation_cfg import ArticulationCfg
-from test_legged_gym.test5_AdvancedEnvironment.common.actuators import *
+from test_legged_gym.test5_AdvancedEnvironment.common.actuators.actuator_cfg import ActuatorCfg
+from test_legged_gym.test5_AdvancedEnvironment.common.actuators.actuator import Actuator
+from test_legged_gym.test5_AdvancedEnvironment.common.actuators.actuator_net import ActuatorNetMLP,ActuatorNetLSTM
 
 
 class Articulation(FileAsset):

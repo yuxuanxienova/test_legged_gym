@@ -39,8 +39,8 @@ class CurriculumManager:
             function(env, env_ids, params)
 
     def log_info(self, env: "LeggedEnv", env_ids, extras_dict):
-        if "terrain_levels" in self.params.keys():
-            extras_dict["terrain_level"] = torch.mean(env.terrain.terrain_levels.float())
+        # if "terrain_levels" in self.params.keys():
+        #     extras_dict["terrain_level"] = torch.mean(env.terrain.terrain_levels.float())
         if "max_lin_vel_command" in self.params.keys():
             extras_dict["max_command_x"] = env.command_ranges["lin_vel_x"][1]
             extras_dict["max_command_y"] = env.command_ranges["lin_vel_y"][1]

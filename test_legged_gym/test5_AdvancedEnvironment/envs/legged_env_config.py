@@ -2,13 +2,13 @@
 from typing import Dict, List, Tuple
 from test_legged_gym.utils.config_utils import configclass
 from test_legged_gym.test5_AdvancedEnvironment.envs.base_env_config import BaseEnvCfg, EnvCfg, ControlCfg
-from legged_gym.common.assets.robots import LeggedRobotCfg
-from legged_gym.common.gym_interface.gym_interface_cfg import GymInterfaceCfg, ViewerCfg
-from legged_gym.common.sensors.sensors_cfg import SensorsCfg
-import legged_gym.envs.locomotion.observations as O
-import legged_gym.envs.locomotion.rewards as R
-import legged_gym.envs.locomotion.terminations as T
-import legged_gym.envs.locomotion.curriculum as C
+from test_legged_gym.test5_AdvancedEnvironment.common.assets.robots.legged_robots.legged_robots_cfg import LeggedRobotCfg,anymal_d_robot_cfg
+from test_legged_gym.test5_AdvancedEnvironment.common.gym_interface.gym_interface_cfg import GymInterfaceCfg, ViewerCfg
+from test_legged_gym.test5_AdvancedEnvironment.common.sensors.sensors_cfg import SensorsCfg
+import test_legged_gym.test5_AdvancedEnvironment.common.observations.observations as O
+import test_legged_gym.test5_AdvancedEnvironment.common.rewards.rewards as R
+import test_legged_gym.test5_AdvancedEnvironment.common.terminations.terminations as T
+import test_legged_gym.test5_AdvancedEnvironment.common.curriculum.curriculum as C
 
 
 
@@ -59,7 +59,7 @@ class ObservationsCfg:
         dof_pos: dict = {"func": O.dof_pos, "noise": 0.01}
         dof_vel: dict = {"func": O.dof_vel, "noise": 1.5}
         actions: dict = {"func": O.actions}
-        height_scan: dict = {"func": O.ray_cast, "noise": 0.1, "sensor": "height_scanner", "clip": (-1, 1.0)}
+        # height_scan: dict = {"func": O.ray_cast, "noise": 0.1, "sensor": "height_scanner", "clip": (-1, 1.0)}
         # bpearl: dict = {"func_name": O.ray_cast, "noise": 0.1, "sensor": "bpearl_front"}
         # bpearl2: dict = {"func_name": O.ray_cast, "noise": 0.1, "sensor": "bpearl_rear"}
 
@@ -103,7 +103,7 @@ class TerminationsCfg:
 @configclass
 class CurriculumCfg:
     # general params
-    terrain_levels = {"func": C.terrain_levels_vel, "mode": "on_reset"}
+    # terrain_levels = {"func": C.terrain_levels_vel, "mode": "on_reset"}
     max_lin_vel_command = None
 
 
@@ -111,13 +111,13 @@ class CurriculumCfg:
 class LeggedEnvCfg(BaseEnvCfg):
 
     # common configuration (from base env)
-    env = EnvCfg(num_envs=4096, num_actions=12, send_timeouts=True, episode_length_s=20)
+    env = EnvCfg(num_envs=1, num_actions=12, send_timeouts=True, episode_length_s=20)
     gym = GymInterfaceCfg(viewer=ViewerCfg(eye=(10, 0, 6), target=(11, 5, 3)))
     control = ControlCfg(decimation=4, action_scale=0.5, action_clipping=100.0)
 
     # legged-env specific configurations
     # -- scene designing
-    robot = LeggedRobotCfg()
+    robot = anymal_d_robot_cfg
     sensors = SensorsCfg()
     # -- mdp signals
     randomization = RandomizationCfg()

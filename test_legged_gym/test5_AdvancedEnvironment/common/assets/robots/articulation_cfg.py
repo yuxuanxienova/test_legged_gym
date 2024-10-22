@@ -1,7 +1,7 @@
 # legged-gym
 from typing import List
-from legged_gym.utils.config_utils import configclass
-from legged_gym.common.assets.asset_cfg import FileAssetCfg
+from test_legged_gym.utils.config_utils import configclass
+from test_legged_gym.test5_AdvancedEnvironment.common.assets.asset_cfg import FileAssetCfg
 
 
 @configclass

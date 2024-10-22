@@ -6,9 +6,9 @@ import torch
 from torch import Tensor
 
 # legged-gym
-from legged_gym.common.gym_interface import GymInterface
-from legged_gym.common.assets.robots.articulation import Articulation
-from .legged_robots_cfg import LeggedRobotCfg
+from test_legged_gym.test5_AdvancedEnvironment.common.gym_interface import GymInterface
+from test_legged_gym.test5_AdvancedEnvironment.common.assets.robots.articulation import Articulation
+from test_legged_gym.test5_AdvancedEnvironment.common.assets.robots.legged_robots.legged_robots_cfg import LeggedRobotCfg
 
 
 class LeggedRobot(Articulation):
